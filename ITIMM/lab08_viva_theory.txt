@@ -1,0 +1,307 @@
+==============================================================================
+ LAB 8 - PRIVATE ETHEREUM NETWORK (3+ NODES) : VIVA PREP (THEORY + QUESTIONS)
+ CS413 Blockchain Technology | Lower-moderate -> higher-moderate difficulty
+ Format : short theory first, then questions with short model answers
+==============================================================================
+
+
+##############################################################################
+PART 1 : SHORT THEORY
+##############################################################################
+
+1.1 PRIVATE ETHEREUM NETWORK
+  An Ethereum network that is isolated from Mainnet/testnets. Only nodes that
+  share the SAME genesis block and network ID can join. Used for development,
+  learning and permissioned/consortium use. No real money: ether is allocated
+  in the genesis file.
+
+1.2 NODE
+  A computer running an Ethereum client (Geth, Besu...). It stores the chain,
+  validates blocks/transactions, talks to peers and may mine/seal blocks.
+  Types: full node (all blocks, validates everything), light node, archive
+  node (all historical states), sealer/miner node (produces blocks).
+
+1.3 GENESIS BLOCK AND genesis.json
+  The first block (block 0). genesis.json defines chainId, fork blocks,
+  consensus settings (e.g. Clique period), initial difficulty, gasLimit,
+  extradata and "alloc" (pre-funded accounts). "geth init genesis.json" writes
+  it to a data directory. Same genesis => same genesis hash => same chain.
+  "Preinitialised node" = init already done.
+
+1.4 NETWORK ID vs CHAIN ID
+  networkid : used in the P2P handshake; nodes with different network IDs
+              refuse to peer.
+  chainId   : part of the chain config; used in transaction signing (EIP-155)
+              to stop replay of a tx on another chain. Usually kept equal.
+
+1.5 PEER-TO-PEER NETWORKING
+  Nodes find peers via discovery (UDP, discv4/5, bootnodes) and connect via
+  RLPx (TCP, port 30303 by default). Each node is identified by an enode URL:
+  enode://<public-key>@<ip>:<port>. In small private nets you add peers
+  manually (admin.addPeer), via static-nodes.json, or --bootnodes, and often
+  use --nodiscover to keep the network closed.
+
+1.6 CONSENSUS IN A PRIVATE NETWORK
+  Proof of Work (old, wasteful) or Proof of Authority such as Clique: a fixed
+  list of authorised signers seal blocks in turn (period = seconds between
+  blocks). Modern mainnet uses Proof of Stake, but private labs usually use
+  Clique (older Geth) or a supplied alternative. Without a block producer,
+  transactions stay pending.
+
+1.7 ACCOUNTS AND TRANSACTIONS
+  Externally Owned Accounts (EOA) hold ether and are controlled by private
+  keys (stored encrypted in the keystore). A transaction has from, to, value,
+  gas, gasPrice/fees, nonce, data, signature. Life cycle: created and signed
+  -> broadcast to peers -> sits in txpool (pending) -> included in a block by
+  a miner/sealer -> block propagated -> every node validates and adds it ->
+  receipt available. Gas limits computation; nonce orders a sender's txs.
+
+1.5b JSON-RPC AND CONSOLE
+  Geth exposes IPC (file geth.ipc), HTTP (8545), WebSocket (8546) with API
+  namespaces eth, net, web3, admin, txpool, personal, miner, clique.
+  "geth attach" opens an interactive JavaScript console on a running node.
+
+1.8 FAULTS AND RECOVERY
+  Common faults: node stopped, peers disconnected (partition), config mismatch
+  (networkid, genesis, ports, bootnode, datadir). Blockchain is fault
+  tolerant: the network continues with remaining nodes and a returning node
+  re-syncs. A partition can cause temporary forks resolved by the longest/
+  heaviest valid chain rule (reorg).
+
+
+##############################################################################
+PART 2 : QUESTIONS WITH MODEL ANSWERS
+##############################################################################
+
+------------------------------------------------------------------------------
+LEVEL A : LOWER-MODERATE (basic recall)
+------------------------------------------------------------------------------
+
+Q1. What is a private Ethereum network?
+A1. An isolated Ethereum blockchain with its own genesis block and network ID,
+    not connected to Mainnet; used for development, testing or consortium use.
+
+Q2. What is a node?
+A2. A computer running Ethereum client software (e.g. Geth) that stores the
+    blockchain, validates transactions/blocks and communicates with peers.
+
+Q3. What is the purpose of genesis.json?
+A3. It defines the first block and chain parameters: chainId, consensus
+    settings, gas limit, difficulty, and initial account balances (alloc).
+
+Q4. What does "geth init" do?
+A4. Initialises a data directory with the genesis block from genesis.json so
+    the node starts on that specific chain.
+
+Q5. What is the default P2P port of Geth? Default HTTP RPC port?
+A5. P2P 30303 (TCP/UDP); HTTP RPC 8545.
+
+Q6. Why must each node on the same machine use different ports?
+A6. Two processes cannot listen on the same port ("address already in use").
+    Each node needs unique --port, --http.port (and authrpc port).
+
+Q7. What command opens the Geth console on a running node?
+A7. geth attach <datadir>/geth.ipc (or geth attach http://127.0.0.1:8545).
+
+Q8. Which console command shows the number of connected peers?
+A8. net.peerCount (also admin.peers.length).
+
+Q9. What is an enode?
+A9. A URL identifying a node on the P2P network: enode://<pubkey>@<ip>:<port>.
+
+Q10. Which command shows account balances and in what unit?
+A10. eth.getBalance(address) - in wei. Convert with web3.fromWei(x,"ether").
+
+Q11. What is the smallest unit of ether? How many wei in 1 ether?
+A11. Wei; 1 ether = 10^18 wei.
+
+Q12. What is the keystore?
+A12. A folder inside the datadir that stores accounts as encrypted JSON files
+     (private keys protected by a password).
+
+------------------------------------------------------------------------------
+LEVEL B : MIDDLE-MODERATE (understanding and interpretation)
+------------------------------------------------------------------------------
+
+Q13. How do you prove that two nodes belong to the same private network?
+A13. Same network ID (net.version), same chainId, and above all the SAME
+     genesis block hash (eth.getBlock(0).hash). Additionally they are peers
+     and share the same latest block hash.
+
+Q14. Difference between networkid and chainId?
+A14. networkid is used in the P2P handshake to decide whether nodes may
+     connect. chainId is part of the chain config and protects transactions
+     from replay on other chains (EIP-155). Both are normally set equal.
+
+Q15. How do you manually connect node2 to node1?
+A15. Get node1's enode (admin.nodeInfo.enode), then in node2's console run
+     admin.addPeer("enode://...@127.0.0.1:30303") and verify with admin.peers.
+
+Q16. What is the difference between admin.addPeer, static-nodes.json and
+     --bootnodes?
+A16. admin.addPeer: runtime, temporary (lost on restart). static-nodes.json:
+     node always tries to connect to the listed peers on start. --bootnodes:
+     initial discovery entry points; the node finds others through them.
+
+Q17. What does --nodiscover do and why use it?
+A17. Disables peer discovery so the node only connects to peers you add
+     explicitly - keeps a private network closed and predictable.
+
+Q18. In a 3-node network with all nodes connected, what peerCount do you expect?
+A18. 2 on each node (every node peers with the other two).
+
+Q19. Explain how a transaction sent on node1 becomes visible on node2.
+A19. node1 signs and broadcasts it to peers; node2 receives it into its
+     txpool (pending). A miner/sealer includes it in a block; the block is
+     propagated and node2 validates it and adds it; then
+     eth.getTransaction(hash) on node2 shows a blockNumber and the receiver's
+     balance is updated.
+
+Q20. A transaction is stuck in "pending". Give three possible reasons.
+A20. No node is mining/sealing (or the sealer is not an authorised Clique
+     signer); gas price too low or a nonce gap; nodes not connected, so the
+     miner never received the transaction.
+
+Q21. What does blockNumber: null in eth.getTransaction mean?
+A21. The transaction is known but not yet mined into a block (pending).
+
+Q22. What does receipt status 0x1 mean?
+A22. The transaction executed successfully (0x0 = failed/reverted).
+
+Q23. Why do we unlock an account before sending a transaction from the console?
+A23. The node needs the decrypted private key to sign the transaction. Unlock
+     loads it into memory for a limited time (personal.unlockAccount) or
+     the node is started with --unlock and --password.
+
+Q24. What is txpool and what does txpool.status show?
+A24. The memory pool of pending/queued transactions waiting to be included in
+     a block. status shows counts: {pending: n, queued: m}.
+
+Q25. What happens to the blockchain if one node of three is stopped?
+A25. The network keeps working with the remaining nodes. The stopped node
+     misses new blocks/transactions and syncs automatically from peers when
+     restarted. If the stopped node was the only sealer, block production
+     halts until it returns.
+
+Q26. Why is it important to stop Geth gracefully (Ctrl+C) and not kill -9?
+A26. Graceful shutdown flushes state to disk and releases locks; a hard kill
+     can leave the database inconsistent or a stale lock/IPC file and slow
+     recovery.
+
+------------------------------------------------------------------------------
+LEVEL C : HIGHER-MODERATE (analysis / troubleshooting)
+------------------------------------------------------------------------------
+
+Q27. All three nodes are running but node3 has 0 peers. List your diagnostic
+     steps in order.
+A27. 1) net.version / chainId equal to others? 2) eth.getBlock(0).hash equal?
+     3) Are ports reachable / firewall rules? 4) Is --nodiscover set / is a
+     bootnode or static-nodes entry correct (compare with admin.nodeInfo.enode
+     of targets)? 5) Try admin.addPeer and recheck admin.peers. 6) Read the
+     node log for handshake / "genesis mismatch" messages.
+
+Q28. A node has a different genesis hash from the others. What happens and how
+     do you fix it?
+A28. It cannot peer (handshake rejects: genesis mismatch) - effectively a
+     different blockchain. Fix: use a datadir initialised with the correct
+     genesis.json (re-init only erases that node's data and only with
+     permission), then restart and re-add peers.
+
+Q29. The examiner changed --networkid on node2. Symptoms and fix?
+A29. Node2 runs but has no peers and stays out of sync (different network).
+     Compare net.version across nodes, fix the script to the common value,
+     stop node2 gracefully, restart, verify peers and block height.
+
+Q30. Two nodes show different latest block hashes at the same block number
+     after a disconnection. What happened and how does the network recover?
+A30. A partition produced a fork (each side sealed its own blocks). After
+     reconnecting, nodes follow the valid chain with the greater total
+     difficulty/length; blocks on the shorter branch are discarded (reorg) and
+     their transactions return to the txpool.
+
+Q31. Why can a transaction be visible in node2's txpool but not yet in a block?
+A31. Gossip delivers it to all peers quickly, but inclusion in a block only
+     happens when a sealer/miner produces the next block (Clique: every
+     "period" seconds).
+
+Q32. Explain "Clique" proof of authority in one paragraph and why it suits a
+     private lab.
+A32. In Clique a predefined set of authorised signers take turns sealing
+     blocks every fixed period. It needs no heavy mining and is deterministic,
+     so it is cheap, fast and suitable for private/consortium networks.
+     Signers are listed in the genesis extradata and can be voted in/out
+     using clique.propose.
+
+Q33. Sender has 5 ether but sending 1 ether fails with "insufficient funds".
+     Why?
+A33. Cost = value + gas*gasPrice. If gas fees plus value exceed balance, or
+     you are using the wrong account/node (different account with 0 balance),
+     the node rejects it. Check eth.getBalance of the exact "from" address.
+
+Q34. "authentication needed: password or unlock" - explain and fix.
+A34. The sender account is locked, so the node cannot sign. Unlock it via the
+     console (personal.unlockAccount) or start the node with --unlock and
+     --password. On newer Geth, use IPC/the supplied method since HTTP unlock
+     is restricted.
+
+Q35. Why is it dangerous to expose HTTP RPC with the personal API and an
+     unlocked account to the network?
+A35. Anyone who can reach the port could send transactions from the unlocked
+     account and move funds. Use only on localhost in labs, and never in
+     production.
+
+Q36. Port conflict: node2 exits immediately with "address already in use". What
+     do you do?
+A36. Find the owner with ss -ltnp | grep <port>. If it is an old geth of yours,
+     stop it gracefully; otherwise give node2 a free --port/--http.port/
+     --authrpc.port and update enode/peer configuration if the P2P port
+     changed.
+
+Q37. How can you verify full recovery after fixing a fault?
+A37. net.peerCount back to expected, same network and genesis hash, same
+     eth.blockNumber and latest hash on all nodes, eth.syncing false, and a
+     test transaction sent on one node is mined and visible on another.
+
+Q38. How is a private network different from the Ethereum mainnet in terms of
+     peers, consensus and currency?
+A38. Private: you control which nodes join (closed peers), PoA/dev consensus
+     with chosen signers, ether is pre-allocated and has no market value.
+     Mainnet: open permissionless peers, Proof of Stake validators, ether has
+     real value.
+
+Q39. After adding a peer with admin.addPeer, it returns true but admin.peers is
+     empty. Why?
+A39. true only means the request was accepted, not that the connection was
+     established. Failure reasons: wrong IP/port, firewall, node not running,
+     network ID or genesis mismatch, maxpeers reached. Check logs and retry.
+
+Q40. Why should you not delete the datadir to "fix" a node in the exam?
+A40. It destroys the preinitialised chain data and keystore (accounts and
+     balances), making restoration harder or impossible; use the least
+     destructive fix and verify first.
+
+------------------------------------------------------------------------------
+QUICK-FIRE ONE-LINERS (rapid revision)
+------------------------------------------------------------------------------
+- Same network proof        : same networkid + same genesis hash
+- Peers on a 3-node network : 2 each
+- Add peer at runtime       : admin.addPeer("enode://...")
+- Remove peer               : admin.removePeer("enode://...")
+- Pending transaction       : blockNumber null; check txpool.status
+- Stopped node effect       : network lives; node re-syncs on restart
+- Partition effect          : fork, then reorg to the heavier valid chain
+- Unique per node           : datadir, --port, --http.port, --authrpc.port
+- Same on all nodes         : genesis.json, networkid, chainId
+- Console attach            : geth attach <datadir>/geth.ipc
+- Hex peer count via RPC    : net_peerCount returns "0x2"
+
+##############################################################################
+PART 3 : SELF-TEST (try without looking at answers)
+##############################################################################
+1. Which three values prove two nodes are on the same private network?
+2. Write the commands to connect node3 to node1 and verify it.
+3. A tx you sent on node1 is not visible as mined on node2 after 2 minutes.
+   List your checks.
+4. The examiner stops node2. What do you observe on node1 and what do you do?
+5. Explain the difference between networkid and chainId in two lines.
+##############################################################################

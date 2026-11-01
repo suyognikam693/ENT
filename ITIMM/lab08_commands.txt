@@ -1,0 +1,616 @@
+==============================================================================
+ LAB 8 - PRIVATE ETHEREUM NETWORK WITH AT LEAST THREE NODES
+ CS413 Blockchain Technology | Laboratory End Semester Exam | Offline Practical
+ Examiner focus: multi-node connectivity, transaction visibility, troubleshooting
+==============================================================================
+
+TASKS
+  Task 1 : Start the provided private network (>= 3 preinitialised nodes) using
+           the supplied local configuration / scripts.
+  Task 2 : Verify nodes belong to the same private network; show peer
+           connectivity / network status.
+  Task 3 : Submit a transaction from an account on one node; observe the
+           transaction / block from ANOTHER node.
+  Task 4 : Troubleshoot an examiner-introduced fault (stopped node, peer
+           disconnection, configuration mismatch), restore, explain the effect.
+
+HOW TO USE THIS FILE
+--------------------
+- This is an OFFLINE exam: no internet. So do NOT plan on apt/npm/pip installs
+  or downloads. Everything must work with what is already on the machine.
+- "Preinitialised nodes" means the data directories already contain the
+  genesis block. So: DO NOT run "geth init" again and DO NOT delete any
+  datadir (chaindata/keystore) unless the examiner says so.
+- Lines starting with "#" are comments. Other lines are commands.
+- The exact script names/folders are given by the examiner. Names below
+  (node1, node2, node3, start-node1.sh ...) are EXAMPLES. Replace them with
+  the real ones. Section 0 shows how to discover the real ones.
+- The commands assume Geth (go-ethereum), the most common client for this lab.
+  If your supplied network uses Hyperledger Besu / Ganache / Docker, see
+  Section 9 for equivalents.
+
+
+==============================================================================
+SECTION 0 : PRE-CHECKS (2 MINUTES - DO NOT SKIP)
+==============================================================================
+
+# 0.1 Where am I, what was supplied?
+pwd
+ls -la
+# Look for: genesis.json, node1/ node2/ node3/ (datadirs), *.sh scripts,
+# password.txt, README, docker-compose.yml, static-nodes.json, keystore folders.
+# If the examiner gave a README, read it first:
+cat README* 2>/dev/null
+
+# 0.2 Geth must be installed - check path and version (write it in your answer)
+which geth
+geth version
+#   "command not found" -> see Troubleshooting T1.
+#   Version matters:
+#     Geth <= 1.13.x : Clique (PoA) private networks, personal API, --unlock work.
+#     Geth >= 1.14   : pre-merge consensus support was dropped; private nets
+#                      often use a dev/--dev style or a supplied alternate setup.
+#   So: ALWAYS use the supplied scripts - they match the installed version.
+
+# 0.3 READ the scripts before running them (never run blind)
+ls *.sh
+cat start-node1.sh        # replace with the real script name
+# Extract the important settings from all scripts in one go:
+grep -nE "datadir|networkid|port|http|authrpc|bootnodes|unlock|password|mine|etherbase|nodiscover|maxpeers|syncmode|ipcpath|verbosity" *.sh
+
+# What to note down (you will need these for verification):
+#   --datadir      : folder of each node
+#   --networkid    : MUST be identical on all nodes (example 1337 / 12345)
+#   --port         : P2P port, MUST be different per node (30303, 30304, 30305)
+#   --http.port    : RPC port, MUST be different per node (8545, 8546, 8547)
+#   --authrpc.port : engine port, different per node (8551, 8552, 8553) - newer Geth
+#   --bootnodes / static-nodes.json / admin.addPeer : how nodes find each other
+#   --mine / --miner.etherbase / --unlock : which node mines, which account used
+
+# 0.4 Check that nothing is already running or using the ports
+pgrep -a geth                                   # any geth already running?
+ss -ltnp 2>/dev/null | grep -E "30303|30304|30305|8545|8546|8547|8551|8552|8553"
+#   If ports are busy by an OLD geth you started -> stop it (see Task 1 stop).
+#   If busy by something else -> see Troubleshooting T4.
+
+# 0.5 Disk and time sanity
+df -h .
+date                                            # clock should be sane
+
+# 0.6 Make scripts executable (only if "Permission denied" appears)
+chmod +x *.sh
+
+
+==============================================================================
+TASK 1 : START THE PRIVATE NETWORK (SUPPLIED SCRIPTS)
+==============================================================================
+
+# Option A (recommended): one terminal per node - easy to watch logs.
+#   Terminal 1:
+./start-node1.sh
+#   Terminal 2:
+./start-node2.sh
+#   Terminal 3:
+./start-node3.sh
+#   (Open more terminals the same way for node4, node5 if more are supplied.)
+
+# Option B: one script that starts all nodes (if supplied):
+./start-network.sh          # or: ./start-all.sh  /  docker compose up -d
+
+# Option C: background mode with log files (when you need one terminal):
+mkdir -p logs
+nohup ./start-node1.sh > logs/node1.log 2>&1 &
+nohup ./start-node2.sh > logs/node2.log 2>&1 &
+nohup ./start-node3.sh > logs/node3.log 2>&1 &
+tail -f logs/node1.log               # Ctrl+C stops tail, NOT the node
+
+# Order tip: start the node whose enode is used as bootnode FIRST (usually node1),
+# wait ~5 seconds, then start the others.
+
+# ---- Verify Task 1 (all nodes alive) ----
+pgrep -a geth                         # should list 3 geth processes with datadirs
+ss -ltnp | grep geth                  # shows listening P2P and RPC ports
+ls node1/geth.ipc node2/geth.ipc node3/geth.ipc    # IPC sockets exist
+#   Healthy log lines look like: "IPC endpoint opened", "HTTP server started",
+#   "Started P2P networking", "Imported new chain segment" / "Commit new sealing work".
+
+# ---- How to STOP nodes cleanly (needed in Task 4) ----
+#   If running in its own terminal: press Ctrl+C once (wait for "Blockchain stopped").
+#   If background:
+pkill -INT -f "datadir node2"         # graceful stop of ONLY node2 (match the real datadir)
+#   Avoid kill -9 (can corrupt the DB / leave stale lock). Use it only as last resort.
+#   Stop everything:  pkill -INT geth
+
+
+==============================================================================
+SECTION 2 : HOW TO TALK TO A NODE (CONSOLE / RPC)  - used in Tasks 2, 3, 4
+==============================================================================
+
+# Interactive JavaScript console attached to a RUNNING node (via IPC - recommended):
+geth attach node1/geth.ipc            # path = <datadir>/geth.ipc
+geth attach node2/geth.ipc
+geth attach node3/geth.ipc
+#   Or via HTTP (port from the script):
+geth attach http://127.0.0.1:8545
+#   Leave the console with:  exit   (or Ctrl+D). This does NOT stop the node.
+#   "Fatal: Failed to start the JavaScript console: ... connect: no such file" -> T5.
+
+# One-line, non-interactive form (great for quick checks and screenshots):
+geth attach --exec "net.peerCount" node1/geth.ipc
+geth attach --exec "eth.blockNumber" node2/geth.ipc
+
+# Raw JSON-RPC with curl (works even if "attach" fails; needs HTTP enabled):
+curl -s -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
+  http://127.0.0.1:8545
+#   Result is hex: "0x2" means 2 peers.
+
+# Check which API modules the console can use:
+modules                                # inside console; need admin, eth, net, personal/txpool
+
+
+==============================================================================
+TASK 2 : VERIFY SAME PRIVATE NETWORK + PEER CONNECTIVITY
+==============================================================================
+# Run these inside each node's console (node1, node2, node3). Make a table.
+
+# 2.1 Same network? (compare across ALL nodes - must match)
+net.version                            # network ID, e.g. "1337" - IDENTICAL on all
+admin.nodeInfo.protocols.eth.network   # same number
+admin.nodeInfo.protocols.eth.config.chainId   # chain ID - IDENTICAL on all
+eth.getBlock(0).hash                   # GENESIS HASH - IDENTICAL on all (strongest proof)
+admin.nodeInfo.protocols.eth.genesis   # same genesis hash (older Geth shows this)
+#   Same networkid + same genesis hash  = same private network.
+#   A different genesis hash = different blockchain; nodes will refuse to peer.
+
+# 2.2 Node identity (needed to add/verify peers)
+admin.nodeInfo.enode                   # this node's enode URL
+admin.nodeInfo.name                    # client/version string
+admin.nodeInfo.ports                   # discovery + listener ports
+#   enode looks like:  enode://<128-hex-pubkey>@[::]:30303
+#   When sharing it, replace "[::]" with 127.0.0.1 (or the real IP).
+
+# 2.3 Peer connectivity
+net.listening                          # true  = node accepts connections
+net.peerCount                          # number of connected peers (3-node net: usually 2)
+admin.peers                            # full detail of each peer
+admin.peers.length
+admin.peers.map(function(p){return p.network.remoteAddress + "  " + p.id.substr(0,10) + "  " + p.name})
+#   admin.peers[i].network.inbound  true = they connected to us, false = we dialled.
+#   admin.peers[i].protocols.eth.head = the peer's latest block hash.
+
+# 2.4 Are all nodes on the same chain tip?
+eth.blockNumber                        # similar on all (differ by 0-1 while mining)
+eth.syncing                            # false = fully synced
+eth.getBlock("latest").hash            # same hash on all nodes at same number
+eth.getBlock("latest").miner           # who sealed/mined it (Clique shows signer)
+net.peerCount + " peers, block " + eth.blockNumber
+
+# 2.5 If peerCount is 0 -> connect nodes manually (safe, reversible, no restart)
+#   On node1 console get its enode:
+admin.nodeInfo.enode
+#   On node2 console add node1 (use node1's real enode, port 30303):
+admin.addPeer("enode://<NODE1_PUBKEY>@127.0.0.1:30303")
+#   On node3 console add node1 and node2 the same way, e.g.:
+admin.addPeer("enode://<NODE1_PUBKEY>@127.0.0.1:30303")
+admin.addPeer("enode://<NODE2_PUBKEY>@127.0.0.1:30304")
+#   Verify again: admin.peers.length ; net.peerCount
+#   (admin.addPeer returns true if it ACCEPTED the request - it does not prove
+#   connection; always re-check admin.peers after 3-5 seconds.)
+#   Note: admin.addPeer is NOT saved; after restart it is forgotten unless
+#   static-nodes.json / bootnodes / --bootnodes in script handle it.
+
+# 2.6 Handy table to put in your answer
+#   Node  | datadir | P2P port | RPC port | networkid | genesis hash | peers | block
+#   node1 |         |          |          |           |              |       |
+#   node2 |         |          |          |           |              |       |
+#   node3 |         |          |          |           |              |       |
+
+
+==============================================================================
+TASK 3 : SEND A TRANSACTION ON ONE NODE, OBSERVE IT ON ANOTHER
+==============================================================================
+# Plan: SEND from node1 (account A) -> to an account B.  OBSERVE on node2 / node3.
+
+# 3.1 Pre-conditions (node1 console)
+eth.accounts                           # accounts held by THIS node (keystore)
+eth.coinbase                           # mining/signing account (if any)
+eth.getBalance(eth.accounts[0])        # in wei
+web3.fromWei(eth.getBalance(eth.accounts[0]), "ether")     # in ether
+#   Sender MUST have a balance (given by genesis "alloc" or mining rewards).
+#   Make sure a miner/sealer is running (some node with --mine). Check:
+eth.mining                             # true on the mining node
+#   If NOT mining anywhere, the tx stays pending forever (see T9). Start with:
+miner.start(1)                         # PoW/dev style only; Clique uses --mine + signer unlock
+
+# 3.2 Pick the receiver (account on node2 is the best demo)
+#   In node2 console:
+eth.accounts[0]                        # copy this address as RECEIVER
+web3.fromWei(eth.getBalance(eth.accounts[0]), "ether")     # note balance BEFORE
+
+# 3.3 Unlock the sender account (node1 console)
+personal.unlockAccount(eth.accounts[0], "<password>", 300)    # unlock for 300 s
+#   Password = from password.txt / examiner. If the script already used
+#   --unlock/--password, the account is already unlocked.
+#   "unknown command personal" or "account unlock with HTTP access is forbidden"
+#   -> T8.
+
+# 3.4 Send the transaction (node1 console)
+var tx = eth.sendTransaction({
+  from: eth.accounts[0],
+  to:   "0x<RECEIVER_ADDRESS>",
+  value: web3.toWei(1, "ether")
+})
+tx                                     # prints the TX HASH - copy it
+#   Optional extras: gas: 21000, gasPrice: web3.toWei(1,"gwei")
+#   Error "insufficient funds" / "authentication needed" / "nonce too low"
+#   -> T9.
+
+# 3.5 Observe from ANOTHER node (node2 and node3 consoles)
+#   (a) Pending pool (while waiting to be mined):
+txpool.status                          # {pending: 1, queued: 0}
+txpool.content
+#   (b) Look the transaction up by hash on node2:
+eth.getTransaction("<TX_HASH>")
+#       blockNumber: null  -> still pending;  a number -> mined
+#   (c) Receipt after it is mined (status 0x1 = success):
+eth.getTransactionReceipt("<TX_HASH>")
+#   (d) The block containing it:
+var b = eth.getTransaction("<TX_HASH>").blockNumber
+eth.getBlock(b)
+eth.getBlock(b).transactions           # contains the hash
+eth.getBlock(b).miner                  # sealer/miner
+#   (e) Balance change visible on node2:
+web3.fromWei(eth.getBalance("0x<RECEIVER_ADDRESS>"), "ether")   # increased by 1
+#   (f) Show it is the same block everywhere:
+eth.getBlock(b).hash                   # run on node1, node2 AND node3 - identical
+eth.blockNumber                        # all nodes reach the same height
+
+# 3.6 Optional: watch new blocks live (node2 console)
+eth.blockNumber
+admin.sleepBlocks(1); eth.blockNumber  # waits for a new block, then prints
+
+# 3.7 Optional: same thing from a script, non-interactive (screenshot friendly)
+geth attach --exec 'eth.getTransaction("<TX_HASH>")' node2/geth.ipc
+geth attach --exec 'eth.getBalance("0x<RECEIVER_ADDRESS>")' node3/geth.ipc
+
+# 3.8 Answer points (what to SAY to the examiner)
+#   - tx was created and signed on node1, broadcast to peers over the eth
+#     protocol (gossip), sits in each node's txpool, then a miner/sealer
+#     includes it in a block; the block is propagated and every node validates
+#     and adds it. That is why node2/node3 can see the same hash, block and
+#     balance.
+
+
+==============================================================================
+TASK 4 : TROUBLESHOOT AN EXAMINER-INTRODUCED FAULT
+==============================================================================
+# General method (say this out loud - examiners love a method):
+#   1. OBSERVE symptom   : peerCount, blockNumber, logs, running processes
+#   2. ISOLATE           : which node, which setting, which layer
+#   3. FIX               : smallest safe change; never wipe data
+#   4. VERIFY            : peers, block height, genesis hash, send test tx
+#   5. EXPLAIN           : what was the effect on the network
+#
+# First-response checklist (run these 6 commands whenever something is wrong):
+pgrep -a geth                                  # who is alive?
+ss -ltnp | grep geth                           # who is listening on which port?
+tail -n 40 logs/node2.log                      # recent log (or look at its terminal)
+geth attach --exec "net.peerCount" node1/geth.ipc
+geth attach --exec "eth.blockNumber" node1/geth.ipc
+grep -nE "networkid|port|bootnodes|datadir" start-node2.sh   # compare nodes' scripts
+
+-------------------------------------------------------------------------------
+ FAULT A : A NODE WAS STOPPED
+-------------------------------------------------------------------------------
+# Symptom  : pgrep shows only 2 geth; "attach" to that node says no such file /
+#            connection refused; other nodes peerCount drops by 1; if the
+#            stopped node was the only miner/sealer, block number STOPS growing.
+# Diagnose :
+pgrep -a geth
+ls node3/geth.ipc                              # missing / stale socket
+geth attach --exec "net.peerCount" node1/geth.ipc    # fell by 1
+# Fix      : restart ONLY that node with its own script (same datadir, same flags):
+./start-node3.sh
+# Verify   :
+geth attach --exec "net.peerCount" node3/geth.ipc
+geth attach --exec "eth.syncing" node3/geth.ipc        # true -> then false
+geth attach --exec "eth.blockNumber" node3/geth.ipc    # catches up to others
+geth attach --exec "eth.getBlock('latest').hash" node3/geth.ipc    # same as node1
+# Effect   : network stays alive with remaining nodes (blockchain is
+#            decentralised); the stopped node misses blocks/transactions, then
+#            re-syncs automatically from peers on restart. If the stopped node
+#            was the sealer/miner, no new blocks until it returns (or another
+#            sealer starts).
+# If restart says "datadir already used by another process" -> T3.
+
+-------------------------------------------------------------------------------
+ FAULT B : PEER DISCONNECTION (nodes running but not connected)
+-------------------------------------------------------------------------------
+# Symptom  : all processes alive, but net.peerCount = 0 / admin.peers empty;
+#            blockNumber differs between nodes (they follow separate tips).
+# Examiner may do: admin.removePeer(...) , block a port with a firewall rule,
+#            delete bootnodes flag, or use --nodiscover.
+# Diagnose :
+admin.peers                                    # empty or missing a node
+admin.nodeInfo.enode                           # re-get each enode (they change if nodekey changes)
+net.version ; eth.getBlock(0).hash             # confirm same network first
+sudo ufw status 2>/dev/null                    # firewall active?
+sudo iptables -L -n 2>/dev/null | head -20     # DROP rules on 3030x?
+# Fix      : reconnect (instant, no restart):
+admin.addPeer("enode://<PEER_PUBKEY>@127.0.0.1:<PEER_P2P_PORT>")
+admin.peers.length
+#            Permanent fix: put the enodes into <datadir>/static-nodes.json (or the
+#            --bootnodes flag in the script) and restart the node:
+#              ["enode://<pubkey1>@127.0.0.1:30303", "enode://<pubkey2>@127.0.0.1:30304"]
+#            If a firewall rule blocks it: remove the rule the examiner added
+#            (sudo ufw allow 30303:30305/tcp  or delete the iptables rule).
+# Verify   : net.peerCount ; same eth.blockNumber and same latest hash on all.
+# Effect   : a partitioned network - each partition may keep producing its own
+#            blocks (fork). After reconnecting, nodes adopt the longest/heaviest
+#            valid chain, shorter-branch blocks are discarded (reorg); txs in
+#            discarded blocks return to the pool.
+
+-------------------------------------------------------------------------------
+ FAULT C : CONFIGURATION MISMATCH
+-------------------------------------------------------------------------------
+# C1  Different --networkid on one node
+#   Symptom : the node runs but gets ZERO peers; log may show handshake failures
+#             (e.g. "Peer connection failed ... network ID mismatch" at debug level).
+#   Check   : geth attach --exec "net.version" nodeX/geth.ipc    (compare to others)
+#             grep networkid start-node*.sh
+#   Fix     : edit the wrong script so networkid equals the others -> stop that
+#             node gracefully (Ctrl+C) -> start again.
+#
+# C2  Different genesis / chainId (node initialised with another genesis.json)
+#   Symptom : peers refuse to connect; log: "Genesis mismatch" or
+#             "Incompatible chain config".  eth.getBlock(0).hash differs.
+#   Check   : eth.getBlock(0).hash on every node.
+#   Fix     : the node must use a datadir initialised with the CORRECT genesis.
+#             Ask the examiner / use the supplied preinitialised datadir backup.
+#             Re-init is DESTRUCTIVE (loses that node's chain data) - do it only
+#             on the faulty node and only if allowed:
+#               geth --datadir nodeX init genesis.json
+#
+# C3  Port conflict / wrong port ("address already in use")
+#   Symptom : node exits right after start.
+#   Check   : ss -ltnp | grep -E "3030|854|855"
+#   Fix     : give each node unique --port, --http.port, --authrpc.port; or stop
+#             the process that holds the port (T4).
+#
+# C4  Wrong / stale bootnode or static-nodes enode
+#   Symptom : node starts, 0 peers; log "Bootstrap" / "Dial" errors.
+#   Check   : compare enode in script with  admin.nodeInfo.enode  of the target.
+#   Fix     : update with the correct enode (pubkey, IP, port) and restart or
+#             use admin.addPeer.
+#
+# C5  Wrong datadir (node started on an empty/wrong folder)
+#   Symptom : blockNumber = 0, no accounts (eth.accounts = []), different genesis.
+#   Fix     : restart with the correct --datadir path.
+#
+# C6  --nodiscover or --maxpeers 0 introduced
+#   Symptom : no automatic peers, admin.peers empty.
+#   Fix     : remove the flag (or add peers manually via admin.addPeer).
+#
+# C7  Different consensus settings (Clique: node not an authorised signer,
+#     or period/epoch mismatch inside genesis)
+#   Symptom : "unauthorized signer" / blocks not produced or rejected.
+#   Check   : clique.getSigners()   ;   clique.status()
+#   Fix     : use the supplied signer account; add signer with
+#             clique.propose("0xADDR", true) from existing signers (majority vote).
+#
+# After ANY fix, run the full verification block:
+net.version ; eth.getBlock(0).hash ; net.peerCount ; admin.peers.length
+eth.blockNumber ; eth.getBlock("latest").hash
+#   ...then send a small test transaction (Task 3) to prove end-to-end recovery.
+
+
+==============================================================================
+SECTION 5 : TROUBLESHOOTING (EXPECTED ERRORS AND FIXES)
+==============================================================================
+T1  "geth: command not found"
+    -> Offline exam: it should already be installed. Look for it:
+         ls /usr/local/bin /usr/bin | grep geth ; find ~ /opt -name geth -type f 2>/dev/null
+       Use the full path (e.g. /opt/geth/geth) or the geth file in the supplied
+       folder:  ./geth version . If missing completely, tell the examiner.
+
+T2  "Permission denied" when running ./start-node1.sh
+    -> chmod +x start-node1.sh   (or run:  bash start-node1.sh)
+
+T3  "Fatal: Failed to create the protocol stack: datadir already used by another process"
+    -> The node is already running (or a stale process). Find it:
+         pgrep -a geth
+       Stop it gracefully:  pkill -INT -f "datadir node1"  (match the real path)
+       Wait 10 s, start again. Do NOT delete the LOCK file or datadir while a
+       process still uses it.
+
+T4  "listen tcp :30303: bind: address already in use" / HTTP port busy
+    -> ss -ltnp | grep 30303   shows the owner. If it is an old geth of yours,
+       stop it. Otherwise change --port / --http.port in that node's script to
+       a free one (and tell others the new enode port).
+
+T5  geth attach: "no such file or directory" / "connection refused"
+    -> The node is not running yet, crashed, or you used the wrong path. Check:
+         pgrep -a geth ; ls <datadir>/geth.ipc
+       Use the --ipcpath from the script if it was customised. Or attach by HTTP.
+
+T6  "Fatal: Error starting protocol stack: ... genesis mismatch" / "database
+     already contains an incompatible genesis block"
+    -> The datadir was initialised with a different genesis. Use the correct
+       datadir. Re-init only with permission (it erases that node's data).
+
+T7  Peers = 0 although all nodes run
+    -> Check in order: same networkid ; same genesis hash ; ports reachable
+       (ss, firewall) ; correct enode / IP ; --nodiscover not set ;
+       admin.addPeer(...) manually. Wait 10-20 seconds after adding.
+
+T8  "unknown command 'personal'" / "account unlock with HTTP access is
+     forbidden" / "personal_unlockAccount" not found
+    -> Newer Geth removed/limited the personal API. Options in order:
+         1. Attach via IPC (not HTTP):  geth attach node1/geth.ipc
+         2. Use the supplied script that already has --unlock + --password
+            (with --allow-insecure-unlock if over HTTP).
+         3. If the account is not unlocked, ask the examiner for the approved
+            signing method (Clef or the provided helper script).
+         Never paste real private keys into the console.
+
+T9  Transaction stays PENDING / errors
+    -> a) "insufficient funds for gas * price + value" : sender balance too low;
+          send less (e.g. 0.1 ether) or use funded account (check genesis alloc).
+       b) "authentication needed: password or unlock" : unlock the account (3.3).
+       c) "nonce too low / replacement transaction underpriced" : pending/previous
+          tx with same nonce; wait for mining, or send with higher gasPrice.
+       d) Pending forever : no miner/sealer is running. Check eth.mining on each
+          node; start the mining node (or start its script that has --mine).
+          In Clique, only authorised signers seal: clique.getSigners().
+       e) "only replay-protected (EIP-155) transactions allowed over RPC" : the
+          node requires chainId; include it or use --rpc.allow-unprotected-txs
+          only if the supplied config says so.
+       f) "exceeds block gas limit" : lower the gas value.
+
+T10 Nodes show different eth.blockNumber
+    -> Normal by 1 for a few seconds. If far apart or different hashes at the
+       same number : peers disconnected (partition/fork) - go to Fault B.
+
+T11 Node log spam: "Looking for peers" with peercount=0
+    -> Same as T7. It is information, not a crash.
+
+T12 Docker-based network (docker-compose supplied)
+    -> docker ps ; docker compose ps ; docker logs <container> ; 
+       docker exec -it <container> geth attach /root/.ethereum/geth.ipc
+       Restart one container: docker restart <container>   (= "node stopped" fault)
+
+T13 Terminal closed -> node died
+    -> That is expected for foreground nodes. Restart the script. Use the
+       nohup/log form (Task 1 Option C) to keep them alive.
+
+T14 Console says "Error: invalid address" in sendTransaction
+    -> Address must be 0x + 40 hex chars, in quotes. Copy it with eth.accounts[0].
+
+T15 Clock/time error or Clique "future block"
+    -> Check date; if the VM clock is wrong, tell the examiner (do not change
+       system time without permission).
+
+
+==============================================================================
+SECTION 6 : OPTIONAL FALLBACK - BUILD THE SAME NETWORK FROM SCRATCH
+==============================================================================
+# ONLY if the examiner supplies no scripts or asks you to build it. Valid for
+# Geth <= 1.13.x (Clique PoA). On newer Geth, use the supplied method.
+
+mkdir -p ~/ethlab && cd ~/ethlab
+mkdir node1 node2 node3
+
+# 6.1 Create one account per node (password in a file, only for the lab)
+echo "lab123" > password.txt
+geth --datadir node1 account new --password password.txt
+geth --datadir node2 account new --password password.txt
+geth --datadir node3 account new --password password.txt
+# Note the three addresses printed (A1, A2, A3).
+
+# 6.2 genesis.json  (replace the <> placeholders; chainId = networkid below)
+# Clique extradata = 0x + 64 zeros + SIGNER ADDRESS (without 0x) + 130 zeros
+cat > genesis.json << 'EOF'
+{
+  "config": {
+    "chainId": 1337,
+    "homesteadBlock": 0, "eip150Block": 0, "eip155Block": 0, "eip158Block": 0,
+    "byzantiumBlock": 0, "constantinopleBlock": 0, "petersburgBlock": 0,
+    "istanbulBlock": 0, "berlinBlock": 0, "londonBlock": 0,
+    "clique": { "period": 5, "epoch": 30000 }
+  },
+  "difficulty": "1",
+  "gasLimit": "8000000",
+  "extradata": "0x0000000000000000000000000000000000000000000000000000000000000000<A1_WITHOUT_0x>0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "alloc": {
+    "<A1_WITH_0x>": { "balance": "1000000000000000000000" },
+    "<A2_WITH_0x>": { "balance": "1000000000000000000000" },
+    "<A3_WITH_0x>": { "balance": "1000000000000000000000" }
+  }
+}
+EOF
+# Check extradata length: after 0x it must be exactly 64 + 40 + 130 = 234 hex chars.
+
+# 6.3 Initialise each node with the SAME genesis
+geth --datadir node1 init genesis.json
+geth --datadir node2 init genesis.json
+geth --datadir node3 init genesis.json
+
+# 6.4 Start nodes (different ports; same networkid). Node1 is the signer.
+geth --datadir node1 --networkid 1337 --port 30303 --http --http.port 8545 \
+     --http.api eth,net,web3,admin,txpool --authrpc.port 8551 \
+     --unlock <A1> --password password.txt --allow-insecure-unlock \
+     --mine --miner.etherbase <A1> --nodiscover
+geth --datadir node2 --networkid 1337 --port 30304 --http --http.port 8546 \
+     --http.api eth,net,web3,admin,txpool --authrpc.port 8552 --nodiscover
+geth --datadir node3 --networkid 1337 --port 30305 --http --http.port 8547 \
+     --http.api eth,net,web3,admin,txpool --authrpc.port 8553 --nodiscover
+# (--nodiscover = connect only to peers YOU add; good for a closed private net)
+
+# 6.5 Connect them: get enode of node1 (console) and addPeer from node2/node3
+#     (Task 2.5), then continue with Tasks 2-4 above.
+
+
+==============================================================================
+SECTION 7 : ONE-SCREEN CHEAT SHEET (CONSOLE)
+==============================================================================
+net.version                      network id
+net.listening                    accepting connections?
+net.peerCount                    number of peers
+admin.nodeInfo.enode             this node's address
+admin.peers                      peer details
+admin.addPeer("enode://...")     connect to a node
+admin.removePeer("enode://...")  disconnect a node
+eth.accounts                     local accounts
+eth.coinbase                     mining/signing account
+eth.blockNumber                  chain height
+eth.getBlock(0).hash             genesis hash (network identity)
+eth.getBlock("latest")           latest block
+eth.getBalance(addr)             balance in wei
+web3.fromWei(x,"ether")          wei -> ether
+web3.toWei(1,"ether")            ether -> wei
+personal.unlockAccount(a,pw,sec) unlock sender
+eth.sendTransaction({from,to,value})  send tx -> returns hash
+eth.getTransaction(hash)         tx details (blockNumber null = pending)
+eth.getTransactionReceipt(hash)  receipt (status 0x1 = success)
+txpool.status                    pending / queued counts
+eth.mining                       is this node mining?
+eth.syncing                      false = synced
+clique.getSigners()              Clique authorised signers
+
+
+==============================================================================
+SECTION 8 : WHAT TO WRITE / SHOW IN THE EXAM (ANSWER FORMAT)
+==============================================================================
+Task 1 : screenshot of 3 running nodes (pgrep -a geth + logs) and listening ports.
+Task 2 : table of networkid / chainId / genesis hash / enode / peerCount for
+         each node + admin.peers output. One line: "Same genesis hash and
+         networkid, peers connected -> same private network."
+Task 3 : tx hash, sender (node1), receiver (node2), eth.getTransaction on
+         node2, block number/hash identical on node2/node3, balance change.
+Task 4 : fault found -> symptom -> command used to diagnose -> fix ->
+         verification -> effect on the network (2-3 lines).
+
+
+==============================================================================
+SECTION 9 : IF THE SUPPLIED NETWORK IS NOT PLAIN GETH
+==============================================================================
+Hyperledger Besu (supplied scripts) :
+   Same ideas; use JSON-RPC (curl) : net_peerCount, admin_peers, eth_blockNumber,
+   eth_getTransactionByHash, eth_getBalance. Besu peers : admin_peers ;
+   add peer : admin_addPeer.
+Ganache : single-process simulator, not a real multi-node P2P network; the
+   examiner would supply several instances - same JSON-RPC checks apply.
+Docker : see T12. Always read docker-compose.yml first (ports, networkid, volumes).
+For any of them the METHOD is unchanged: start -> verify same network (genesis
+hash/chainId) -> verify peers -> send tx on one node, read on another ->
+diagnose with the first-response checklist.
+
+==============================================================================
+ SAFETY SUMMARY (remember in the exam)
+==============================================================================
+ 1. Read scripts before running. 2. Never re-init or delete datadirs unless told.
+ 3. Stop nodes with Ctrl+C / SIGINT, not kill -9. 4. One change at a time, then
+ verify. 5. Never expose HTTP RPC with unlock to other machines (lab only).
+ 6. Offline exam: no downloads - rely on what is installed.
+==============================================================================
