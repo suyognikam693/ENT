@@ -1,0 +1,512 @@
+==============================================================================
+ LABORATORY EXERCISE 01 - LINUX INFRASTRUCTURE MONITORING USING CLI TOOLS
+ Scenario : Monitor the health of an Ubuntu application server
+ CO       : CO1, CO2, CO3          Bloom Levels : BL3, BL4, BL5
+ Tasks    : 1 (2 marks) | 2 (3 marks) | 3 (3 marks) | 4 (2 marks)  = 10 marks
+==============================================================================
+
+HOW TO USE THIS FILE
+--------------------
+- Run the commands in order, top to bottom, in a terminal on Ubuntu.
+- Lines starting with "#" are comments/instructions. Lines without "#" are commands.
+- Save every output into a "lab01" folder (shown in Section 0). You can paste
+  these outputs into your lab report / screenshots as proof.
+- Everything here is READ-ONLY monitoring except the OPTIONAL load-generation
+  step in Section 3B (clearly marked, with safety checks).
+
+
+==============================================================================
+SECTION 0 : PRE-CHECKS AND SETUP (DO THIS FIRST)
+==============================================================================
+
+# 0.1 Confirm you are on Ubuntu and note the version (put this in your report)
+lsb_release -a
+cat /etc/os-release
+uname -r                  # kernel version
+hostnamectl               # hostname, OS, kernel, virtualization (VM or physical)
+
+# 0.2 Check who you are and whether sudo works
+whoami
+sudo -v                   # asks for password; if it fails, see Troubleshooting T1
+
+# 0.3 Check internet / package index (needed only for installing tools)
+sudo apt update
+#   If "apt update" fails -> see Troubleshooting T2
+
+# 0.4 Check which tools are already installed and their versions.
+#     top, free, uptime come from the "procps" package (usually preinstalled).
+#     df comes from "coreutils" (always installed).
+#     vmstat comes from "procps".
+#     iostat and sar come from the "sysstat" package (usually NOT preinstalled).
+top -v
+free -V
+uptime -V
+df --version | head -1
+vmstat -V
+iostat -V                 # will say "command not found" if sysstat is missing
+sar -V                    # same
+
+# 0.5 Install sysstat if iostat/sar are missing (safe, standard Ubuntu package)
+sudo apt install -y sysstat procps
+#   After install, re-verify:
+iostat -V
+sar -V
+
+# 0.6 Enable sysstat data collection (needed for sar HISTORY; live sampling
+#     with "sar 2 5" works even without this).
+#     Check the setting:
+grep -n "ENABLED" /etc/default/sysstat
+#     If it shows ENABLED="false", change it to "true":
+sudo sed -i 's/ENABLED="false"/ENABLED="true"/' /etc/default/sysstat
+sudo systemctl enable --now sysstat
+systemctl status sysstat --no-pager
+#   (On Ubuntu 22.04+/24.04 the collector runs via systemd timers; "sar" history
+#    files appear under /var/log/sysstat/ after the first 10 minutes.)
+
+# 0.7 Create a working folder for all outputs
+mkdir -p ~/lab01 && cd ~/lab01
+pwd
+
+# 0.8 Record basic hardware facts - needed to interpret load average later
+nproc                     # number of CPU cores/threads  (REMEMBER THIS NUMBER)
+lscpu | grep -E "Model name|^CPU\(s\)|Thread|Core"
+lsblk                     # disks and partitions (note disk name: sda, nvme0n1, vda...)
+date                      # timestamp for the report
+
+
+==============================================================================
+TASK 1 : top, free, df, uptime  ->  CPU, MEMORY, DISK, LOAD CONDITIONS (2 marks)
+==============================================================================
+
+---------- 1A. uptime  (load averages) ----------
+uptime
+uptime -p                 # pretty format: "up 2 hours, 5 minutes"
+uptime -s                 # time system booted
+# Save:
+uptime | tee ~/lab01/task1_uptime.txt
+
+# HOW TO READ:  load average: 0.45, 0.60, 0.55   -> 1-min, 5-min, 15-min
+#   Rule of thumb:  load  <  nproc  = healthy
+#                   load  =  nproc  = fully used
+#                   load  >  nproc  = processes are queuing (overloaded)
+#   Compare the 3 numbers: 1-min > 15-min means load is RISING; reverse = FALLING.
+#   Load on Linux counts running + waiting-for-CPU + waiting-for-disk (D state)
+#   processes, so high load with low CPU% often means DISK problem.
+
+---------- 1B. top  (CPU, process utilisation) ----------
+# Interactive mode (to observe live):
+top
+#   Useful keys inside top:
+#     q  quit            1  show each CPU core separately
+#     P  sort by CPU     M  sort by memory
+#     k  kill a process (ask PID)  -- DON'T kill anything in this lab
+#     h  help            d  change refresh delay
+#
+# Non-interactive (best for saving output / screenshots):
+top -b -n 1 | head -20
+#   NOTE: the first iteration of top shows averages since the previous refresh,
+#   so for accurate CPU numbers use 2 iterations and read the second block:
+top -b -n 2 -d 1 | tee ~/lab01/task1_top_raw.txt
+top -b -n 1 -o %CPU | head -15 > ~/lab01/task1_top_cpu.txt     # top CPU users
+top -b -n 1 -o %MEM | head -15 > ~/lab01/task1_top_mem.txt     # top memory users
+#   If "-o" is not supported (very old procps), use:  top -b -n 1 | head -15
+
+# HOW TO READ the top header:
+#   %Cpu(s): us (user)  sy (kernel)  ni (nice)  id (idle)  wa (I/O wait)
+#            hi (hardware irq)  si (software irq)  st (stolen by hypervisor)
+#   - High us  -> application is CPU-bound
+#   - High sy  -> lots of system calls / kernel work
+#   - High wa  -> CPU is idle waiting for DISK  (storage bottleneck)
+#   - High st  -> noisy VM neighbours (cloud/VM issue)
+#   Process states (S column): R running, S sleeping, D uninterruptible
+#   (usually waiting on disk I/O), Z zombie, T stopped.
+
+---------- 1C. free  (memory and swap) ----------
+free -h                   # human readable (MiB/GiB)
+free -m                   # in MiB
+free -h -s 2 -c 3         # 3 samples, 2 seconds apart
+free -h | tee ~/lab01/task1_free.txt
+
+# HOW TO READ:
+#   total      = installed RAM
+#   used       = memory used by processes
+#   free       = completely unused (will usually look small - that is NORMAL)
+#   buff/cache = disk cache, reclaimable when apps need memory
+#   available  = MEMORY APPS CAN ACTUALLY GET  <-- the number to judge by
+#   Swap used  > 0 and growing = memory pressure.  Heavy swap = server is slow.
+#   Healthy:  available > ~20% of total  and  swap mostly unused.
+
+---------- 1D. df  (disk space) ----------
+df -h                     # human readable
+df -hT                    # also show filesystem type (ext4, xfs, tmpfs)
+df -hT -x tmpfs -x devtmpfs -x squashfs    # hide noisy virtual/snap filesystems
+df -i                     # INODE usage (disk can be "full" of inodes!)
+df -h / | tee ~/lab01/task1_df.txt
+
+# HOW TO READ:
+#   Use%  is the key column.  Compare to thresholds in Task 4 (85% / 95%).
+#   Mounted on "/" is the root filesystem; "/var", "/home" may be separate.
+#   If IUse% is 100% but Use% is low -> too many small files (inode exhaustion).
+#   Find what is eating space (safe, read-only):
+sudo du -xh / --max-depth=1 2>/dev/null | sort -rh | head -10
+
+---------- 1E. One-shot summary script for Task 1 ----------
+{
+  echo "=== DATE ===";    date
+  echo "=== UPTIME ===";  uptime
+  echo "=== CORES ===";   nproc
+  echo "=== MEMORY ===";  free -h
+  echo "=== DISK ===";    df -hT -x tmpfs -x devtmpfs -x squashfs
+  echo "=== TOP ===";     top -b -n 2 -d 1 | tail -n +$(( $(top -b -n 2 -d 1 | grep -n '^top -' | tail -1 | cut -d: -f1) )) | head -20
+} > ~/lab01/task1_summary.txt 2>&1
+cat ~/lab01/task1_summary.txt
+
+---------- 1F. Write your Task-1 observation (fill in) ----------
+#   CPU/Load : load avg = __ / __ / __ on __ cores  -> (healthy / busy / overloaded)
+#   CPU %    : us=__ sy=__ id=__ wa=__
+#   Memory   : total=__ available=__ swap used=__  -> (healthy / pressure)
+#   Disk     : "/" Use% = __  -> (OK / warning / critical)
+
+
+==============================================================================
+TASK 2 : vmstat, iostat, sar - FIVE SAMPLES OF RESOURCE UTILISATION (3 marks)
+==============================================================================
+# SYNTAX:   tool  <interval-seconds>  <count>
+# Using interval 2 and count 5 -> takes about 10 seconds, gives 5 samples.
+#
+# IMPORTANT: for vmstat and iostat the FIRST line/report is the average SINCE
+# BOOT, not current activity. So "5 samples" = ask for 6 reports and ignore the
+# first, OR just note that the first is since-boot. sar does NOT do this (its
+# first line is already a real interval). Both approaches are shown below.
+
+---------- 2A. vmstat ----------
+vmstat 2 5                       # exactly five reports (first = since boot)
+vmstat 2 6 | tee ~/lab01/task2_vmstat.txt    # 6 reports -> 5 REAL samples after the first
+vmstat -w 2 5                    # wide output, easier to read
+vmstat -S M 2 5                  # memory shown in MB
+vmstat -s | head -20             # one-time memory/event counters (extra)
+vmstat -d | head                 # disk statistics (extra)
+
+# vmstat COLUMNS:
+#   procs : r = runnable (waiting for CPU)   b = blocked (waiting on I/O)
+#   memory: swpd, free, buff, cache  (KB)
+#   swap  : si = swapped in from disk,  so = swapped out to disk   (should be ~0)
+#   io    : bi = blocks read from disk, bo = blocks written to disk
+#   system: in = interrupts/s,  cs = context switches/s
+#   cpu   : us sy id wa st   (percent)
+# Red flags: r consistently > number of cores (CPU saturation)
+#            b > 0 repeatedly (I/O wait), si/so > 0 (memory/swap pressure),
+#            wa high (storage bottleneck)
+
+---------- 2B. iostat ----------
+iostat 2 5                       # CPU + basic device report
+iostat -x 2 6 | tee ~/lab01/task2_iostat.txt       # EXTENDED stats, 6 reports (ignore 1st)
+iostat -xz 2 5                   # -z hides devices with zero activity (cleaner)
+iostat -xh 2 5                   # human-readable units
+iostat -d -x sda 2 5             # one specific device (replace sda with YOUR disk
+                                 #  name from "lsblk", e.g. nvme0n1 or vda)
+iostat -c 2 5                    # CPU section only (shows %iowait)
+
+# iostat -x KEY COLUMNS (names differ slightly between sysstat versions):
+#   r/s, w/s           reads / writes per second
+#   rkB/s, wkB/s       throughput (older versions: rMB/s, wMB/s)
+#   r_await, w_await   avg time (ms) a request waits + is served (older: single "await")
+#   aqu-sz             avg queue length            (older: avgqu-sz)
+#   %util              % of time device was busy.  ~100% = saturated
+#   svctm              REMOVED in newer sysstat - do not rely on it
+# CPU section:  %iowait is the CPU idle time spent waiting for disk.
+# Red flags: %util near 100, await > ~20 ms on SSD / > ~50 ms on HDD,
+#            aqu-sz consistently > 1-2, %iowait > 15-20.
+
+---------- 2C. sar ----------
+# Live sampling (works even if the sysstat service is not enabled)
+sar -u 2 5                       # CPU utilisation (%user %system %iowait %idle)
+sar -r 2 5                       # memory utilisation (%memused, kbavail)
+sar -q 2 5                       # run-queue length and load averages
+sar -b 2 5                       # overall disk I/O (tps, bread/s, bwrtn/s)
+sar -d -p 2 5                    # per-disk stats with real device names
+sar -n DEV 2 5                   # network interface throughput (extra)
+sar -S 2 5                       # swap usage (extra)
+
+# Save all of them to files:
+sar -u 2 5 | tee ~/lab01/task2_sar_cpu.txt
+sar -r 2 5 | tee ~/lab01/task2_sar_mem.txt
+sar -b 2 5 | tee ~/lab01/task2_sar_io.txt
+sar -d -p 2 5 | tee ~/lab01/task2_sar_disk.txt
+sar -q 2 5 | tee ~/lab01/task2_sar_load.txt
+
+# sar HISTORICAL data (only if sysstat collection is enabled - see 0.6):
+ls /var/log/sysstat/             # files saDD (binary), sarDD (text)
+sar -u                           # today's CPU history so far
+sar -u -f /var/log/sysstat/sa$(date +%d)    # explicit file for today
+sar -u -s 09:00:00 -e 12:00:00   # only a time window
+#   If "Cannot open /var/log/sysstat/saXX: No such file" -> see Troubleshooting T4
+
+---------- 2D. Run all three together, one after another (as the task says) ----------
+{
+  echo "######## vmstat ########"; vmstat 2 6
+  echo "######## iostat ########"; iostat -xz 2 6
+  echo "######## sar -u ########"; sar -u 2 5
+  echo "######## sar -r ########"; sar -r 2 5
+  echo "######## sar -b ########"; sar -b 2 5
+} 2>&1 | tee ~/lab01/task2_all_samples.txt
+
+# Look at the "Average:" line sar prints at the end of each run - use it in
+# your report.
+
+
+==============================================================================
+TASK 3 : ANALYSE CPU, MEMORY, DISK-I/O MEASUREMENTS -> FIND THE BOTTLENECK (3 marks)
+==============================================================================
+# Goal: from the numbers, decide WHICH resource is the bottleneck.
+# Use your own outputs from Tasks 1 and 2, OR the sample data below (the lab says
+# "supplied measurements", so your teacher may give you numbers - use the SAME
+# decision process).
+
+---------- 3A. Decision table (memorise this) ----------
+#  SYMPTOMS                                                      BOTTLENECK
+#  ------------------------------------------------------------  -----------------
+#  us+sy high (>80%), id low, load > cores, wa low, r high       CPU
+#  available RAM low, swap used, si/so > 0, kswapd busy          MEMORY
+#  CPU id HIGH (low use) but wa HIGH, b > 0, %util ~100,         DISK I/O
+#  await high, aqu-sz high, load high despite low CPU
+#  r_await/w_await fine, throughput near device limit            DISK THROUGHPUT
+#  all resources low but app slow                                APP / NETWORK / LOCKS
+
+---------- 3B. SAMPLE MEASUREMENTS (use if none supplied) ----------
+#  uptime : load average: 6.80, 5.90, 4.20      nproc = 4
+#  top    : %Cpu(s): 6.0 us, 4.0 sy, 0 ni, 30.0 id, 58.0 wa, 0 hi, 2.0 si, 0 st
+#  free   : total 8.0Gi, used 3.2Gi, available 4.1Gi, swap used 0B
+#  vmstat : r=1 b=7 si=0 so=0 bi=45000 bo=38000 us=6 sy=4 id=30 wa=58
+#  iostat : sda  r/s=410  w/s=520  r_await=62ms  w_await=95ms  aqu-sz=14.2  %util=99.8
+#
+#  ANALYSIS (write like this in your answer):
+#   1. CPU : us+sy = 10% only, idle 30%  -> CPU is NOT the limit.
+#   2. Memory : 4.1 GiB available (~51%), no swap, si=so=0 -> memory is NOT the limit.
+#   3. Disk : wa = 58%, b = 7 blocked processes, %util = 99.8, await 62-95 ms,
+#      queue length 14 -> disk is saturated and requests are queuing.
+#   4. Load average 6.8 on 4 cores looks like CPU overload, BUT CPU idle is
+#      30% - the load is made of processes stuck in D state waiting for disk.
+#   CONCLUSION : DISK I/O BOTTLENECK. The server is stalled waiting on storage,
+#   not on processing power.
+#   RECOMMENDATIONS : find the heavy process (iotop / pidstat -d), move logs/DB
+#   to faster disk (SSD/NVMe), add caching, tune queries/batch writes, check
+#   for runaway logging, add RAM for page cache, check RAID/disk health.
+
+---------- 3C. Find WHO is causing disk I/O (read-only tools) ----------
+sudo apt install -y iotop         # optional
+sudo iotop -oPa                   # (q to quit) only active processes, accumulated
+pidstat -d 2 5                    # per-process disk stats (part of sysstat)
+pidstat -u 2 5                    # per-process CPU
+ps -eo pid,stat,pcpu,pmem,comm --sort=-pcpu | head      # STAT "D" = waiting on I/O
+ps aux | awk '$8 ~ /D/ {print}'                        # list D-state processes
+dmesg -T | grep -iE "error|i/o|ata|nvme" | tail         # disk errors (may need sudo)
+sudo smartctl -H /dev/sda 2>/dev/null                   # disk health (install smartmontools)
+
+---------- 3D. OPTIONAL: GENERATE A SAFE TEST LOAD TO PRACTISE ----------
+# ONLY on your own lab VM/PC, never on a shared or production server.
+# SAFETY CHECKS BEFORE YOU START:
+#   (a) At least 3 GB free disk:           df -h /tmp
+#   (b) Not on battery / not near-full disk.
+#   (c) Know how to stop: press Ctrl+C in the terminal running the load.
+#   (d) Always clean up the test file afterwards (last command).
+#
+# Open TWO terminals. Terminal 1 = generate load. Terminal 2 = monitor.
+#
+# --- Terminal 1: DISK I/O load (writes a 1 GB file, forced to disk) ---
+df -h /tmp
+dd if=/dev/zero of=/tmp/lab01_iotest bs=1M count=1024 oflag=dsync status=progress
+#   (for a longer run, repeat it a few times in a loop:
+#    for i in 1 2 3; do dd if=/dev/zero of=/tmp/lab01_iotest bs=1M count=1024 oflag=dsync; done )
+#
+# --- Terminal 1 (alternative): CPU load for 30 s using 2 workers ---
+sudo apt install -y stress-ng
+stress-ng --cpu 2 --timeout 30s --metrics-brief
+#
+# --- Terminal 1 (alternative): memory load, 512 MB for 30 s ---
+stress-ng --vm 1 --vm-bytes 512M --timeout 30s
+#   Do NOT use huge values; very high --vm-bytes can freeze the machine.
+#
+# --- Terminal 2: watch the effect while load runs ---
+vmstat 2 10
+iostat -xz 2 10
+top
+#
+# --- CLEANUP (always) ---
+rm -f /tmp/lab01_iotest
+ls -l /tmp/lab01_iotest 2>&1       # should say: No such file
+
+
+==============================================================================
+TASK 4 : INFRASTRUCTURE HEALTH REPORT + TWO JUSTIFIED THRESHOLDS (2 marks)
+==============================================================================
+
+---------- 4A. The two thresholds (from the lab sheet) ----------
+# THRESHOLD 1 : DISK SPACE USAGE
+#    Warning  : 85%        Critical : 95%
+#    Justification: ext4 reserves ~5% for root; above 95% applications fail to
+#    write logs/temp files, databases can crash or corrupt, and cleanup itself
+#    becomes difficult. 85% gives time (days) to clean up or expand storage
+#    BEFORE a failure. Disk fills are slow and predictable, so an early warning
+#    is cheap and effective.
+#
+# THRESHOLD 2 : CPU I/O WAIT (%iowait)
+#    Warning  : 15%        Critical : 25%
+#    Justification: iowait means the CPU is idle only because it is waiting for
+#    storage. Sustained >15% shows disk latency is starting to stall requests;
+#    >25% means a quarter of CPU capacity is wasted and application response
+#    time rises sharply. Catching it early lets you act before the disk
+#    severely starves processing power. (Use SUSTAINED values over several
+#    samples, not a single spike.)
+
+---------- 4B. Monitoring script that checks both thresholds ----------
+# Create the script (copy the whole block into the terminal):
+cat > ~/lab01/health_check.sh << 'EOF'
+#!/bin/bash
+# Lab 01 - simple health check with two thresholds
+DISK_WARN=85;  DISK_CRIT=95
+IOW_WARN=15;   IOW_CRIT=25
+
+# --- Disk usage of root filesystem (strip the % sign) ---
+DISK_USE=$(df --output=pcent / | tail -1 | tr -dc '0-9')
+
+# --- Average iowait over 5 one-second samples (skip the first = since boot) ---
+IOWAIT=$(vmstat 1 6 | tail -5 | awk '{s+=$16} END {printf "%.0f", s/NR}')
+
+# Safety: make sure values are numbers
+if ! [[ "$DISK_USE" =~ ^[0-9]+$ && "$IOWAIT" =~ ^[0-9]+$ ]]; then
+  echo "ERROR: could not read metrics (DISK_USE='$DISK_USE', IOWAIT='$IOWAIT')"
+  exit 3
+fi
+
+status() {   # $1=value $2=warn $3=crit
+  if   [ "$1" -ge "$3" ]; then echo "CRITICAL"
+  elif [ "$1" -ge "$2" ]; then echo "WARNING"
+  else echo "OK"; fi
+}
+
+echo "===== Infrastructure Health Report ====="
+echo "Host    : $(hostname)"
+echo "Time    : $(date)"
+echo "Uptime  : $(uptime -p)"
+echo "Load    : $(cut -d' ' -f1-3 /proc/loadavg)  (cores: $(nproc))"
+echo "Memory  : $(free -h | awk '/Mem:/ {print "used "$3" / total "$2", available "$7}')"
+echo "---------------------------------------"
+echo "Disk usage (/)   : ${DISK_USE}%  -> $(status $DISK_USE $DISK_WARN $DISK_CRIT)  [warn ${DISK_WARN}% / crit ${DISK_CRIT}%]"
+echo "CPU iowait (avg) : ${IOWAIT}%  -> $(status $IOWAIT $IOW_WARN $IOW_CRIT)  [warn ${IOW_WARN}% / crit ${IOW_CRIT}%]"
+echo "======================================="
+EOF
+
+# NOTE: the awk column $16 is "wa" in standard vmstat output. If your vmstat
+# prints a different layout (check header with: vmstat 1 2), adjust the number.
+
+chmod +x ~/lab01/health_check.sh
+bash -n ~/lab01/health_check.sh && echo "Syntax OK"     # syntax check before running
+~/lab01/health_check.sh | tee ~/lab01/task4_health_report.txt
+
+# Exit codes / automation (optional): run every 5 minutes with cron
+#   crontab -e      then add:
+#   */5 * * * * /home/YOUR_USER/lab01/health_check.sh >> /home/YOUR_USER/lab01/health.log 2>&1
+
+---------- 4C. BRIEF HEALTH REPORT TEMPLATE (fill in and submit) ----------
+------------------------------------------------------------------
+INFRASTRUCTURE HEALTH REPORT
+Server : <hostname>      OS : Ubuntu <version>      Date : <date/time>
+Prepared by : <name, roll no>
+
+1. Summary : Overall status = HEALTHY / DEGRADED / CRITICAL
+2. CPU & Load : load avg __ / __ / __ on __ cores; us=__% sy=__% id=__% wa=__%
+3. Memory     : total __, available __, swap used __
+4. Disk space : "/" at __% used (inodes __%)
+5. Disk I/O   : %util=__, await=__ ms, queue=__  (from iostat/sar)
+6. Bottleneck identified : CPU / Memory / Disk I/O / None   (with 1-line reason)
+7. Monitoring thresholds
+     T1 Disk space : Warn 85% / Crit 95%   - prevents write failures & DB crashes
+     T2 CPU iowait : Warn 15% / Crit 25%   - flags storage delay before CPU is starved
+8. Recommendations : 2-3 bullet points (e.g. clean logs, add disk, move DB to SSD)
+------------------------------------------------------------------
+
+
+==============================================================================
+TROUBLESHOOTING (EXPECTED ERRORS AND FIXES)
+==============================================================================
+T1  "sudo: command not found" / "user is not in the sudoers file"
+    -> Log in as a user with sudo rights, or run:  su -   then  usermod -aG sudo YOURUSER
+       (log out and back in).  On a college lab PC ask the admin for sudo.
+
+T2  "apt update" fails / "Temporary failure resolving archive.ubuntu.com"
+    -> Check internet:  ping -c 3 8.8.8.8   and   ping -c 3 archive.ubuntu.com
+    -> If IP works but name fails = DNS problem:  resolvectl status
+    -> Behind a proxy: set it in /etc/apt/apt.conf.d/95proxy
+       (Acquire::http::Proxy "http://host:port";)
+    -> "Could not get lock /var/lib/dpkg/lock-frontend": another apt/update is
+       running. Wait a minute and retry. Do NOT delete lock files unless you
+       are sure no apt process runs (check: ps aux | grep -E "apt|dpkg").
+    -> "E: Unable to locate package sysstat": run sudo apt update first; enable
+       the "universe" repo:  sudo add-apt-repository universe && sudo apt update
+
+T3  "iostat: command not found" / "sar: command not found"
+    -> sysstat not installed:  sudo apt install -y sysstat
+
+T4  sar says "Cannot open /var/log/sysstat/saXX: No such file or directory"
+    -> Collection not enabled. Do step 0.6. Wait ~10 minutes for the first data.
+    -> For live sampling use:  sar -u 2 5   (no history file needed)
+    -> Or create the first record manually:  sudo /usr/lib/sysstat/debian-sa1 1 1
+
+T5  "Please check if data collecting is enabled" (sar message)
+    -> Same fix as T4: ENABLED="true" in /etc/default/sysstat, then
+       sudo systemctl restart sysstat
+
+T6  iostat shows no disk lines / shows only loop devices (snap)
+    -> Ubuntu snaps create many loop devices. Use:  iostat -xz 2 5  (hides zeros)
+       or specify the disk: iostat -x -d sda 2 5  (name from lsblk)
+
+T7  Column names differ from the notes (await vs r_await/w_await,
+    avgqu-sz vs aqu-sz, svctm missing)
+    -> Different sysstat versions. Check:  iostat -V . Read the header line of
+       your own output; the meaning is the same.
+
+T8  top output looks garbled when redirected to a file
+    -> Always use batch mode:  top -b -n 1 > file.txt . Interactive top cannot
+       be redirected.
+
+T9  "free" shows very little "free" memory (looks like memory is nearly full)
+    -> Normal. Linux uses spare RAM as cache. Judge by the "available" column.
+
+T10 df shows many snap "/dev/loop" entries at 100%
+    -> Normal (read-only squashfs images). Hide with:  df -h -x squashfs -x tmpfs
+
+T11 vmstat awk column wrong in health_check.sh
+    -> Run  vmstat 1 2  and count the column of "wa" (usually 16). Newer procps
+       may add a "gu" column AFTER "st", which does not move "wa".
+
+T12 Running in a container (Docker/WSL) - numbers look odd or missing
+    -> In WSL/containers some tools show host-wide or limited data, and sar
+       history/systemd may be unavailable. Use a real Ubuntu VM
+       (VirtualBox/VMware) or a native install for the lab.
+
+T13 Permission denied while reading a path (du, dmesg, iotop)
+    -> Prefix with sudo. These are read-only commands, safe with sudo.
+
+T14 The system freezes during the stress test
+    -> You used too large a load. Wait for timeout, or press Ctrl+C. If the
+       desktop is frozen, switch to a TTY (Ctrl+Alt+F3), then:
+       pkill stress-ng ; pkill dd
+       Use smaller values next time (e.g. --vm-bytes 256M).
+
+T15 Disk got full after dd test
+    -> rm -f /tmp/lab01_iotest ; df -h /tmp  to confirm space returned.
+
+
+==============================================================================
+FINAL SUBMISSION CHECKLIST
+==============================================================================
+[ ] OS + tool versions recorded (Section 0)
+[ ] Task 1: outputs of uptime, top, free, df + 4-line observation
+[ ] Task 2: five samples each of vmstat, iostat, sar (files in ~/lab01)
+[ ] Task 3: written bottleneck analysis (decision table + conclusion)
+[ ] Task 4: health report with the two justified thresholds
+[ ] All screenshots show the command and its output; zip the ~/lab01 folder
+    (zip -r lab01_submission.zip ~/lab01  -> install zip if needed: sudo apt install zip)
+[ ] Test files (/tmp/lab01_iotest) deleted
+==============================================================================
