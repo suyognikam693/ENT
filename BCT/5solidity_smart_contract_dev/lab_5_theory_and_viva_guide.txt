@@ -1,0 +1,579 @@
+==============================================================================
+LAB 5 - SOLIDITY SMART CONTRACT DEVELOPMENT
+THEORY + VIVA QUESTIONS (Blockchain Technology)
+==============================================================================
+
+TABLE OF CONTENTS
+  PART A - Lab Overview and Overall Process
+  PART B - Theory: What Smart Contracts and EVM Are
+  PART C - Theory: Compilation and Deployment (Task 1)
+  PART D - Theory: State-Changing vs. Read Operations (Task 2)
+  PART E - Theory: Transaction Details, Receipts, and Gas (Task 3)
+  PART F - Theory: Modifying Rules, Access Control, and Redeployment (Task 4)
+  PART G - Worked Example & Code Structure (Complete Smart Contract & Interactions)
+  PART H - Theory: EVM Architecture, Memory Layout, and Security
+  PART I - Design Details, Edge Cases, and Common Pitfalls
+  PART J - Common Mistakes and Examiner Focus
+  PART K - Viva Questions with Answers (Exhaustive)
+  PART L - Quick Revision Cheat Sheet
+
+
+==============================================================================
+PART A - LAB OVERVIEW AND OVERALL PROCESS
+==============================================================================
+
+Goal of the lab
+---------------
+Develop, compile, deploy, and test a simple Solidity smart contract in a local Ethereum 
+development environment (e.g., Remix IDE, Hardhat, Truffle, or Ganache) to demonstrate:
+  1. how Solidity source code compiles into EVM Bytecode and ABI,
+  2. how to deploy a contract and obtain its unique contract address,
+  3. the fundamental difference between `view`/`pure` read operations (free) and 
+     state-changing transaction operations (cost gas),
+  4. how to inspect transaction receipts (block number, gas used, transaction status, 
+     logs/events),
+  5. how to implement and modify access-control and validation logic (`require`, 
+     modifiers, custom errors) and observe the resulting reverted state.
+
+The four tasks form one pipeline:
+
+  Task 1: Compile and deploy the supplied/simple Solidity smart contract in the 
+          preconfigured local environment.
+  Task 2: Execute at least one state-changing operation (setter/transaction) and one 
+          read/query operation (getter/call).
+  Task 3: Verify the resulting contract state and inspect available transaction details 
+          such as status, block number, transaction hash, and gas usage.
+  Task 4: Modify one validation/access-control/business rule as instructed (e.g., add 
+          `onlyOwner` or a minimum deposit check), redeploy or retest it, and demonstrate 
+          the changed behavior (revert vs success).
+
+Overall process
+---------------
+Step 1. Write or import a Solidity smart contract (e.g., `SimpleStorage` or a basic 
+        `Bank`/`Vault` contract) containing state variables, constructor, getter 
+        functions, and state-altering setter functions.
+Step 2. Select the target compiler version (pragma directive, e.g., `pragma solidity ^0.8.20;`) 
+        and compile the code to generate the Application Binary Interface (ABI) and EVM Bytecode.
+Step 3. Select a preconfigured local EVM environment (Remix VM / Hardhat Network / Ganache) 
+        and deploy the contract using an account with test Ether.
+Step 4. Note down the deployed contract address and the deployment transaction receipt.
+Step 5. Execute a read operation (`view` function). Observe that it executes instantly 
+        without creating a block or consuming gas from the user's wallet.
+Step 6. Execute a state-changing operation (a transaction function). Observe that it 
+        requires signing, gets included in a block, updates state variables, and consumes gas.
+Step 7. Inspect the transaction logs/receipt: confirm `status: 1 (Success)`, check `gasUsed`, 
+        `blockNumber`, `from`, `to`, and emitted events.
+Step 8. Modify the contract rules as instructed by the examiner (e.g., add `require(msg.value > 0)` 
+        or `require(msg.sender == owner, "Not owner")`).
+Step 9. Re-compile and redeploy the contract to a NEW contract address.
+Step 10. Execute the modified function under passing conditions (e.g., as owner) and failing 
+         conditions (e.g., as non-owner). Demonstrate that failing conditions revert the 
+         transaction, consume gas for execution up to the revert point, and leave state unchanged.
+
+What the examiner checks
+  - Successful compilation with no errors.
+  - Proper understanding of the difference between constant/read calls vs transactions.
+  - Correct identification of transaction metadata (Gas used, Transaction Hash, Block Number).
+  - Ability to implement access-control / input validation (`require`, `revert`, modifiers) 
+    and demonstrate that reverted transactions do not alter state.
+
+Good output to show
+  - Clean compilation tab showing ABI and Bytecode generated.
+  - Deployed contract instance under "Deployed Contracts" with an active Ethereum address.
+  - Console logs showing transaction receipts (Status: 0x1 Success, Gas Used, Block Number).
+  - Demonstration of a reverted transaction showing exception reason ("Not owner" or "Invalid amount").
+
+
+==============================================================================
+PART B - THEORY: WHAT SMART CONTRACTS AND EVM ARE
+==============================================================================
+
+B.1 Definition
+--------------
+A Smart Contract is an immutable, executable program stored at a specific address on a 
+blockchain network. It contains state variables, functions, and logic that execute 
+automatically when triggered by an Ethereum transaction or message call.
+
+B.2 Key Properties
+------------------
+1. Deterministic Execution: Given the same blockchain state and input parameters, the contract 
+   will produce the exact same state output on every node in the network.
+2. Immutability: Once deployed to an address, the contract code CANNOT be edited or changed. 
+   Bug fixes or rule changes require deploying a brand-new contract instance to a new address.
+3. Trustless & Autonomous: Executes automatically according to written code without requiring 
+   a human intermediary or centralized administrator.
+4. Transparency: The deployed bytecode (and typically verified source code) is publicly 
+   accessible and readable by anyone on the network.
+
+B.3 The Ethereum Virtual Machine (EVM)
+--------------------------------------
+The EVM is a quasi-Turing complete, 256-bit stack-based execution environment that processes 
+smart contract bytecode across all Ethereum nodes.
+
+Key EVM Characteristics:
+- 256-Bit Word Size: Designed specifically for 256-bit cryptographic operations (like SHA-256 / Keccak-256).
+- Isolated Sandbox: Smart contracts execute inside a sandboxed environment; they cannot access 
+  the host machine's hardware, filesystem, or network sockets.
+- Deterministic Gas Metering: Every EVM opcode (e.g., `ADD`, `SSTORE`, `SLOAD`) has an associated 
+  gas cost to prevent infinite loops and Resource Exhaustion DoS attacks.
+
+B.4 Account Types in Ethereum
+------------------------------
+1. Externally Owned Accounts (EOAs): Controlled by private keys (human users). Have an Ether 
+   balance, a nonce (transaction count), but NO code or storage.
+2. Contract Accounts: Controlled by their deployed smart contract code. Have an Ether balance, 
+   a nonce, an address, EVM Bytecode, and persistent Storage.
+
+
+==============================================================================
+PART C - THEORY: COMPILATION AND DEPLOYMENT (TASK 1)
+==============================================================================
+
+C.1 Compilation Artifacts
+-------------------------
+When Solidity code (`.sol`) is compiled using the Solidity compiler (`solc`), it generates two 
+critical artifacts:
+
+1. EVM Bytecode:
+   The low-level machine-readable hexadecimal instructions executed by the EVM.
+   Example: `0x608060405234801561001057600080fd5b50...`
+   - Creation Bytecode: Executed during contract deployment (runs the constructor and returns runtime bytecode).
+   - Runtime Bytecode: Stored on-chain permanently at the contract address to handle future calls.
+
+2. Application Binary Interface (ABI):
+   A JSON-formatted specification detailing the contract's public interfaces, functions, arguments, 
+   return types, mutability, and events.
+   - Purpose: Enables client applications (web frontend, web3.js, ethers.js) and other tools to 
+     encode transaction data correctly and parse EVM return data.
+
+Example ABI snippet:
+```json
+[
+  {
+    "inputs": [{"name": "x", "type": "uint256"}],
+    "name": "set",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  }
+]
+```
+
+C.2 The Contract Deployment Process
+------------------------------------
+1. Creation Transaction: The deployer (EOA) sends a transaction where the `to` field is set 
+   to empty (`0x0` or `null`), and the `data` field contains the contract's Creation Bytecode 
+   plus constructor parameters.
+2. Address Calculation: The new contract's address is deterministically calculated using 
+   the sender's address and sender's transaction nonce:
+   
+   $$\text{Contract Address} = \text{Keccak256}(\text{RLPEncode}(\text{senderAddress}, \text{nonce}))[12:32]$$
+
+3. Constructor Execution: The EVM executes initialization logic inside the constructor.
+4. Storage Allocation: Initial state variables are written to contract storage.
+5. Runtime Bytecode Storage: The remaining runtime bytecode is assigned to the generated contract address.
+
+
+==============================================================================
+PART D - THEORY: STATE-CHANGING VS. READ OPERATIONS (TASK 2)
+==============================================================================
+
+D.1 Function State Mutability Levels
+------------------------------------
+Solidity classifies functions into four distinct mutability levels based on whether they modify 
+or read contract storage:
+
+| Mutability Keyword | Can Read Contract State? | Can Modify Contract State? | Costs Gas when called externally? | Creates Transaction? |
+| :--- | :--- | :--- | :--- | :--- |
+| **`pure`** | NO | NO | NO (Free) | NO (Call) |
+| **`view`** | YES | NO | NO (Free) | NO (Call) |
+| **Default (nonpayable)** | YES | YES | YES | YES (Transaction) |
+| **`payable`** | YES | YES (and accepts Ether) | YES | YES (Transaction) |
+
+D.2 Read Operations ("Calls")
+-----------------------------
+- Keyword: `view` or `pure`.
+- Nature: Executed locally on a single node reading from its local copy of the state database.
+- Gas Cost: Free when called externally by an EOA or client library.
+- Transaction Hash: None generated.
+- State Effect: No data on the blockchain is altered.
+
+Examples of state reading:
+- Reading a public variable or getter (`uint256 public myData;`).
+- Reading balances (`address(this).balance` or `balances[msg.sender]`).
+
+D.3 State-Changing Operations ("Transactions")
+---------------------------------------------
+- Keyword: Standard functions without `view`/`pure` (or marked `payable`).
+- Nature: Broadcasted to the network, placed in the mempool, mined into a block, and executed by all validating nodes.
+- Gas Cost: Consumes Gas paid in Ether/Gwei by the caller.
+- Transaction Hash: Generates a unique 64-character hex transaction hash (e.g., `0xabc123...`).
+- State Effect: Modifies values stored in persistent Contract Storage.
+
+Examples of state modification:
+- Updating a variable (`storedData = x;`).
+- Transferring Ether (`payable(recipient).transfer(amount)`).
+- Emitting events, creating new contracts, or changing mappings.
+
+
+==============================================================================
+PART E - THEORY: TRANSACTION DETAILS, RECEIPTS, AND GAS (TASK 3)
+==============================================================================
+
+E.1 Transaction Receipt Structure
+---------------------------------
+When a state-changing transaction is confirmed in a block, the network generates a 
+Transaction Receipt containing key metadata:
+
+- Transaction Hash (`txHash`): Unique SHA-256/Keccak-256 identifier of the transaction.
+- Status (`status`): `0x1` for Success, `0x0` for Failure/Revert.
+- Block Number (`blockNumber`): The block index where the transaction was recorded.
+- Contract Address (`contractAddress`): Present if it was a contract creation transaction.
+- From (`from`): Address of the account that signed and submitted the transaction (`msg.sender`).
+- To (`to`): Target contract address (or contract creation recipient).
+- Gas Used (`gasUsed`): Exact units of EVM gas consumed by the execution.
+- Cumulative Gas Used: Total gas used in the block up to this transaction.
+- Effective Gas Price: Price paid per gas unit in Wei/Gwei.
+- Logs / Events (`logs`): Structured event data emitted during execution.
+
+E.2 Understanding Gas, Gas Limit, and Gas Fees
+------------------------------------------------
+Gas is the computational unit used to measure the resource consumption of executing instructions on the EVM.
+
+Formula for Total Transaction Fee:
+$$\text{Transaction Fee (Ether)} = \text{Gas Used} \times \text{Effective Gas Price}$$
+
+Definitions:
+1. Gas Units: Fixed computational cost of opcodes (e.g., `ADD` = 3 gas, `SSTORE` = 20,000 gas for fresh storage).
+2. Gas Limit: The maximum gas the user allows the transaction to consume. Protects users from runaway loops.
+3. Out of Gas Error (OOG): If execution exceeds Gas Limit, execution halts immediately; ALL state changes REVERT, but spent gas is kept by the miner/validator.
+
+
+==============================================================================
+PART F - THEORY: MODIFYING RULES, ACCESS CONTROL, AND REDEPLOYMENT (TASK 4)
+==============================================================================
+
+F.1 Access Control and Input Validation
+---------------------------------------
+Smart contracts must protect state changes using access-control and validation statements:
+
+1. `require(condition, "error string")`:
+   - Evaluates a condition. If false, reverts the entire transaction and refunds unused gas.
+   - Primary tool for input validation and permission checks.
+
+2. Modifiers (`modifier`):
+   - Reusable structural code wrappers attached to function definitions.
+   - Example:
+     ```solidity
+     modifier onlyOwner() {
+         require(msg.sender == owner, "Not owner");
+         _; // Continues execution of function body
+     }
+     ```
+
+3. Custom Errors (`error Unauthorized();`):
+   - Modern Solidity feature (0.8.4+) that reduces gas costs compared to string error messages.
+   - Used with `revert Unauthorized();`.
+
+F.2 What Happens During a Revert?
+--------------------------------
+When a transaction hits a `revert` or failed `require`:
+1. Atomic Rollback: Every state modification made during that transaction is undone (restored to pre-transaction state).
+2. Balance Preserved: Contract balance changes and variable updates are canceled.
+3. Gas Behavior: Gas consumed up to the point of failure is paid to the validator/miner; unused gas is refunded to the sender.
+4. Status Code: The transaction receipt sets `status: 0x0 (Failure)`.
+
+F.3 The Need for Redeployment
+-----------------------------
+Because smart contract code is **immutable**:
+- Editing source code in your editor does NOT update a deployed contract on the blockchain.
+- The modified code must be compiled to fresh bytecode and deployed as a brand-new contract instance at a **NEW contract address**.
+- Existing state from the old contract address does NOT automatically carry over to the new deployment.
+
+
+==============================================================================
+PART G - WORKED EXAMPLE & CODE STRUCTURE
+==============================================================================
+
+G.1 Original Simple Contract (Tasks 1, 2, & 3)
+-----------------------------------------------
+Below is a clean Solidity contract demonstrating basic storage and retrieval:
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+contract SimpleStorage {
+    // State variable stored persistently on the blockchain
+    uint256 private storedData;
+    address public owner;
+
+    // Event emitted when state changes
+    event DataStored(address indexed updatedBy, uint256 newValue);
+
+    constructor(uint256 initialValue) {
+        owner = msg.sender;
+        storedData = initialValue;
+    }
+
+    // State-changing operation (Transaction, costs gas)
+    function set(uint256 x) public {
+        storedData = x;
+        emit DataStored(msg.sender, x);
+    }
+
+    // Read operation (Call, free when called externally)
+    function get() public view returns (uint256) {
+        return storedData;
+    }
+}
+```
+
+G.2 Task 4: Modified Contract with Validation & Access Control
+--------------------------------------------------------------
+The modified contract adds access control (`onlyOwner`) and validation (`x > 0`):
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+contract SimpleStorageModified {
+    uint256 private storedData;
+    address public owner;
+
+    event DataStored(address indexed updatedBy, uint256 newValue);
+
+    // Custom Error for gas-efficient reverts
+    error NotOwner(address caller);
+    error InvalidValue(uint256 value);
+
+    constructor(uint256 initialValue) {
+        owner = msg.sender;
+        storedData = initialValue;
+    }
+
+    // Custom modifier for restricted access
+    modifier onlyOwner() {
+        if (msg.sender != owner) {
+            revert NotOwner(msg.sender);
+        }
+        _;
+    }
+
+    // Modified state-changing operation with 2 validation checks
+    function set(uint256 x) public onlyOwner {
+        // Rule 1: Input validation
+        require(x > 0, "Value must be greater than zero");
+        
+        storedData = x;
+        emit DataStored(msg.sender, x);
+    }
+
+    function get() public view returns (uint256) {
+        return storedData;
+    }
+
+    // Allow transferring ownership
+    function transferOwnership(address newOwner) public onlyOwner {
+        require(newOwner != address(0), "Invalid new owner");
+        owner = newOwner;
+    }
+}
+```
+
+G.3 Test Execution Protocol (Demonstrating Changed Behavior)
+------------------------------------------------------------
+1. Deploy `SimpleStorageModified(100)` using Account A (Owner).
+2. Call `set(50)` from Account A -> Success! `get()` returns `50`. Receipt shows `Status: 0x1`.
+3. Call `set(0)` from Account A -> Transaction REVERTS with message `"Value must be greater than zero"`. `get()` remains `50`.
+4. Switch account to Account B (Non-owner).
+5. Call `set(200)` from Account B -> Transaction REVERTS with custom error `NotOwner(Account B)`. `get()` remains `50`.
+
+
+==============================================================================
+PART H - THEORY: EVM ARCHITECTURE, MEMORY LAYOUT, AND SECURITY
+==============================================================================
+
+H.1 EVM Data Locations
+----------------------
+Solidity variables live in one of four data locations, each with distinct lifetime and gas cost profiles:
+
+1. Storage:
+   - Persistent key-value store mapping 256-bit keys to 256-bit values.
+   - Extremely expensive (writing a new slot costs 20,000 gas; updating costs 5,000 gas).
+   - Holds state variables.
+
+2. Memory:
+   - Temporary byte-array data location exists only during function execution.
+   - Cheap gas cost. Holds function parameters and local complex variables (strings, arrays, structs).
+
+3. Calldata:
+   - Read-only, non-modifiable area containing function parameters passed by callers.
+   - Cheapest location for array parameters in external functions.
+
+4. Stack:
+   - Holds small local primitive variables (1024 slots deep, max 16 accessible items from top).
+   - "Stack Too Deep" error occurs if a function uses too many local variables.
+
+H.2 Basic Smart Contract Security Principles
+---------------------------------------------
+1. Checks-Effects-Interactions Pattern:
+   To prevent Reentrancy attacks:
+   - Checks: Validate inputs/conditions (`require`).
+   - Effects: Update internal contract state variables.
+   - Interactions: Call external contracts or transfer Ether.
+2. Integer Overflow Protection:
+   Solidity 0.8.0+ has built-in overflow/underflow checks that automatically revert transactions on arithmetic overflow.
+3. Access Control Defaulting:
+   Unrestricted state-changing functions are a major vulnerability. Functions must default to internal/private unless explicitly meant to be public, and sensitive functions must use access control.
+
+
+==============================================================================
+PART I - DESIGN DETAILS, EDGE CASES, AND COMMON PITFALLS
+==============================================================================
+
+I.1 `msg.sender` vs `tx.origin`
+------------------------------
+- `msg.sender`: Immediate caller of the current function (can be an EOA or another smart contract).
+- `tx.origin`: Original EOA that initiated the entire transaction chain.
+- Security Rule: ALWAYS use `msg.sender` for authentication. Using `tx.origin` makes contracts vulnerable to Phishing / Authorization Delegation attacks.
+
+I.2 `transfer` vs `send` vs `call` for Ether Transfer
+-----------------------------------------------------
+- `address.transfer(amount)`: Forwards 2300 gas; throws error on failure. (Legacy, discouraged).
+- `address.send(amount)`: Forwards 2300 gas; returns `bool` status. (Legacy, discouraged).
+- `(bool success, ) = address.call{value: amount}("")`: Forwards all available gas; returns `bool` status. **Recommended standard** combined with Reentrancy protection.
+
+I.3 Constructor vs Function Rules
+---------------------------------
+- The `constructor` executes EXACTLY ONCE during initial contract deployment creation.
+- It is never stored in runtime bytecode and cannot be called again after deployment.
+
+
+==============================================================================
+PART J - COMMON MISTAKES AND EXAMINER FOCUS
+==============================================================================
+
+Common Mistakes
+---------------
+1. Expecting `view`/`pure` functions to modify state variables (they compile with errors or fail to save data).
+2. Expecting changes in source code to update an already-deployed contract without re-deploying to a new address.
+3. Forgetting that Ether transfers require functions to be explicitly marked `payable`.
+4. Confusing `gasLimit` with `gasUsed` in transaction reports.
+5. Using `tx.origin` instead of `msg.sender` for authorization checks.
+6. Forgetting to test both failure conditions (reverts) and success conditions in Task 4.
+
+Examiner Focus
+--------------
+- Compilation & Deployment: Clean compilation and understanding of ABI/Bytecode.
+- Operational Distinction: Explaining clearly why getter calls do not cost gas while setters generate transactions and consume gas.
+- Inspection Competency: Locating and reading `gasUsed`, `blockNumber`, and transaction status from the console.
+- Rule Enforcement: Demonstrating that access control / validation rules prevent unauthorized or invalid state changes via transaction reverts.
+
+
+==============================================================================
+PART K - VIVA QUESTIONS WITH ANSWERS (EXHAUSTIVE)
+==============================================================================
+
+------------------------- SECTION 1: SOLIDITY & EVM BASICS -------------------
+
+Q1. What is a smart contract?
+A. An immutable, self-executing program stored at an address on the blockchain that executes deterministically inside the EVM when triggered by transactions.
+
+Q2. What is the EVM?
+A. The Ethereum Virtual Machine (EVM) is a 256-bit, stack-based runtime environment that executes smart contract bytecode across nodes in an isolated sandbox.
+
+Q3. What are the two types of accounts in Ethereum?
+A. Externally Owned Accounts (EOAs, controlled by private keys) and Contract Accounts (controlled by deployed smart contract code).
+
+Q4. What is the difference between ABI and Bytecode?
+A. Bytecode is the executable hexadecimal machine code deployed to the EVM; ABI (Application Binary Interface) is a JSON document describing function signatures and data structures so applications can interact with the contract.
+
+Q5. How is a contract address calculated during deployment?
+A. It is calculated deterministically by taking the Keccak-256 hash of the deployer's address and their transaction nonce: `Keccak256(RLP(sender, nonce))`.
+
+------------------------- SECTION 2: MUTABILITY & GAS -----------------------
+
+Q6. What is the difference between a `view` function and a `pure` function?
+A. A `view` function can read state variables from contract storage but cannot modify them; a `pure` function cannot read OR modify contract storage (it operates solely on its input parameters).
+
+Q7. Why do `view` calls not cost gas when invoked externally?
+A. Because they are executed locally on the user's local node to read data; they do not create a transaction, do not require consensus, and do not alter the blockchain state.
+
+Q8. What is Gas in Ethereum?
+A. Gas is a metering unit measuring the computational and storage resources consumed by executing opcodes on the EVM. It prevents infinite loops and resource abuse.
+
+Q9. What is the difference between Gas Limit and Gas Used?
+A. Gas Limit is the maximum gas a user is willing to spend on a transaction; Gas Used is the actual amount of gas consumed by the EVM to execute the transaction.
+
+Q10. What happens if a transaction runs Out of Gas (OOG)?
+A. The execution halts immediately, all state modifications revert back to pre-transaction state, but the gas consumed up to that point is non-refundable and kept by the validator.
+
+------------------------- SECTION 3: TRANSACTIONS & RECEIPTS -----------------
+
+Q11. What key information is contained in a Transaction Receipt?
+A. Transaction Hash, Status (`0x1` success or `0x0` revert), Block Number, Contract Address (if creation), From address, To address, Gas Used, and emitted Logs/Events.
+
+Q12. What does a status code of `0x1` vs `0x0` signify in a receipt?
+A. `0x1` indicates the transaction completed successfully; `0x0` indicates the transaction was reverted due to a failed check, error, or out-of-gas exception.
+
+Q13. What is an Event and why are Events emitted?
+A. Events write data to EVM log structures outside contract storage. They allow web frontends and indexers to listen for state changes efficiently without expensive storage reads.
+
+------------------------- SECTION 4: ACCESS CONTROL & VALIDATION -------------
+
+Q14. What does the `require` statement do?
+A. It tests a condition. If true, execution continues; if false, it halts execution, reverts all state changes, refunds remaining gas, and returns an optional error message.
+
+Q15. What is a modifier in Solidity?
+A. A reusable wrapper attached to function headers to execute pre-requisite validation or authorization checks before (or after) running the main function body (`_;`).
+
+Q16. What happens to state variables when a transaction reverts?
+A. Every state variable change made during that transaction is completely rolled back to its state prior to transaction execution (atomic rollback).
+
+Q17. What is `msg.sender`?
+A. A global variable representing the immediate address (EOA or contract) that called the current executing function.
+
+Q18. Why should you use `msg.sender` instead of `tx.origin` for authorization?
+A. `tx.origin` returns the original EOA that started the transaction chain, making contracts vulnerable to phishing attacks where an intermediate malicious contract tricks an owner into calling it.
+
+------------------------- SECTION 5: ADVANCED & SECURITY --------------------
+
+Q19. What are the main EVM data locations for variables?
+A. Storage (persistent, expensive), Memory (temporary execution data, cheap), Calldata (read-only input parameter space), and Stack (small local variables).
+
+Q20. Can you edit code in a smart contract after it is deployed?
+A. No. Code at a deployed address is immutable. Any modification requires compiling and deploying the new code to a completely new address.
+
+Q21. What is the purpose of the `payable` keyword?
+A. It explicitly enables a function or address to receive Ether during a transaction. Non-payable functions automatically revert if sent Ether.
+
+Q22. What is integer overflow and how does modern Solidity handle it?
+A. Integer overflow occurs when an arithmetic operation exceeds fixed bit limits (e.g., $255 + 1 = 0$ in uint8). Solidity 0.8.0+ automatically checks and reverts on arithmetic overflow/underflow.
+
+
+==============================================================================
+PART L - QUICK REVISION CHEAT SHEET
+==============================================================================
+
+  Artifacts     : Bytecode (hex machine code) + ABI (JSON function interface)
+  Deployment    : Creation transaction to 0x0 address -> New address generated
+  Read Ops      : `view` / `pure` -> Local execution, NO gas cost, NO tx hash
+  Write Ops     : State-changing -> Broadcast to network, consumes Gas, returns txHash
+  Receipt Data  : txHash, status (0x1/0x0), blockNumber, gasUsed, from, to, logs
+  Validation    : `require(cond, "err")` -> Reverts state, refunds remaining gas
+  Modifiers     : `modifier check() { require(...); _; }` -> Reusable access checks
+  Immutability  : Code cannot be modified after deployment; updates require NEW address
+  Data Locations: Storage (persistent/expensive), Memory (temp/cheap), Calldata (read-only params)
+  Security Rule : Always use `msg.sender` for authentication, NEVER `tx.origin`
+
+==============================================================================
+END OF DOCUMENT
+==============================================================================
+```
+
+### Key Highlights of this Lab 5 Guide:
+- **Full Coverage of Lab Tasks:** Detailed step-by-step guidelines spanning compilation, deployment, reading/writing state, receipt inspection (Gas, Block Number, Status), and adding validation/access control rules.
+- **Code Examples Included:** Complete, runnable Solidity snippets showing both the original contract and the Task 4 modified contract (`onlyOwner`, `require`, custom errors).
+- **Comprehensive Theory:** Thorough explanations of ABI, Bytecode, EVM gas dynamics, data locations (`storage`, `memory`, `calldata`), and transaction receipts.
+- **Exhaustive Viva Section:** 22 detailed viva questions and answers categorized into 5 sections covering Solidity syntax, gas mechanics, receipts, access control, and security best practices.

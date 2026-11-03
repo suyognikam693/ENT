@@ -1,0 +1,34 @@
+=====================================================================
+ TASK 0 - ONE-TIME SETUP (Ubuntu 20.04/22.04/24.04, internet needed)
+ Skip entirely if the exam PC already has Docker + ~/fabric-samples.
+=====================================================================
+Check first - if all three work, skip to TASK 1:
+  $ docker ps
+  $ ls ~/fabric-samples/bin/peer
+  $ go version
+
+A. Install packages
+  $ sudo apt-get update
+  $ sudo apt-get install -y curl git jq python3 xxd docker.io docker-compose-v2
+      (if docker-compose-v2 is "not found":  sudo apt-get install -y docker-compose)
+  $ sudo systemctl enable --now docker
+  $ sudo usermod -aG docker $USER
+  >>> LOG OUT AND LOG IN AGAIN (or run: newgrp docker). Then check:  $ docker ps   (no sudo needed)
+
+B. Install Go (needed because deployCC vendors the Go chaincode)
+  $ curl -LO https://go.dev/dl/go1.23.4.linux-amd64.tar.gz        (arm64 machine: use linux-arm64)
+  $ sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.23.4.linux-amd64.tar.gz
+  $ echo 'export PATH=$PATH:/usr/local/go/bin' >> ~/.profile
+  $ source ~/.profile
+  $ go version
+
+C. Download Fabric (binaries + docker images + fabric-samples) into your home folder
+  $ cd ~
+  $ curl -sSLO https://raw.githubusercontent.com/hyperledger/fabric/main/scripts/install-fabric.sh
+  $ chmod +x install-fabric.sh
+  $ ./install-fabric.sh docker samples binary
+  $ ls ~/fabric-samples/bin        (expect: peer, orderer, configtxlator, cryptogen, ...)
+
+D. Check
+  $ docker images | grep hyperledger
+  $ ~/fabric-samples/bin/peer version

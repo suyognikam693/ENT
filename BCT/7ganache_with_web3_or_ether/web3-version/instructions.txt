@@ -1,0 +1,31 @@
+# in second terminal keep this running
+ganache \
+  --server.host 127.0.0.1 \
+  --server.port 8545 \
+  --wallet.totalAccounts 10 \
+  --wallet.defaultBalance 1000
+
+
+#task 1:
+mkdir ese
+cd ese
+npm init -y
+npm install web3@1.10.0
+nano task1.js
+#paste codes/web3/task1.js
+node task1.js
+
+#task2:
+nano task2.js
+#paste codes/web3/task2.js
+node task2.js
+
+#task3:
+nano task3.js
+#paste codes/web3/task3.js
+node task3.js
+
+#task4.js
+nano task4.js
+#paste codes/web3/task4.js
+node task4.js

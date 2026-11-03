@@ -1,0 +1,47 @@
+cd ~/ethlab
+
+# ---------- start node1 (the signer) ----------
+nohup geth --datadir node1 --networkid 1337 --port 30303 --syncmode full \
+  --http --http.port 8545 --http.api eth,net,web3,admin,txpool,personal,clique \
+  --allow-insecure-unlock --authrpc.port 8551 \
+  --unlock $(cat addr1.txt) --password password.txt \
+  --mine --miner.etherbase $(cat addr1.txt) --nodiscover > logs/node1.log 2>&1 &
+sleep 5
+
+# ---------- start node2 ----------
+nohup geth --datadir node2 --networkid 1337 --port 30304 --syncmode full \
+  --http --http.port 8546 --http.api eth,net,web3,admin,txpool,personal,clique \
+  --authrpc.port 8552 --nodiscover > logs/node2.log 2>&1 &
+
+# ---------- start node3 ----------
+nohup geth --datadir node3 --networkid 1337 --port 30305 --syncmode full \
+  --http --http.port 8547 --http.api eth,net,web3,admin,txpool,personal,clique \
+  --authrpc.port 8553 --nodiscover > logs/node3.log 2>&1 &
+sleep 5
+
+# ---------- verify all 3 are running ----------
+pgrep -a geth
+ss -ltnp | grep geth
+ls node1/geth.ipc node2/geth.ipc node3/geth.ipc
+tail -n 10 logs/node1.log
+# "Commit new sealing work" / "Successfully sealed new block" = node1 is sealing blocks
+
+# ---------- link the nodes (because of --nodiscover) ----------
+E1=$(geth attach --exec "admin.nodeInfo.enode" node1/geth.ipc | tr -d '"' | sed 's/\[::\]/127.0.0.1/')
+E2=$(geth attach --exec "admin.nodeInfo.enode" node2/geth.ipc | tr -d '"' | sed 's/\[::\]/127.0.0.1/')
+echo $E1; echo $E2
+geth attach --exec "admin.addPeer('$E1')" node2/geth.ipc
+geth attach --exec "admin.addPeer('$E1')" node3/geth.ipc
+geth attach --exec "admin.addPeer('$E2')" node3/geth.ipc
+sleep 4
+geth attach --exec "net.peerCount" node1/geth.ipc
+geth attach --exec "net.peerCount" node2/geth.ipc
+geth attach --exec "net.peerCount" node3/geth.ipc
+# expected: none is 0 (roughly 2, 2, 2). If 0, wait 5 s and repeat the 3 addPeer lines.
+
+# ---------- Interactive console (examiner may ask) ----------
+geth attach node1/geth.ipc
+#   > net.peerCount
+#   > admin.peers
+#   > eth.blockNumber
+#   > exit

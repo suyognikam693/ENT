@@ -1,0 +1,24 @@
+mkdir ese 
+cd ese
+
+truffle init
+
+nano contracts/SimpleStorage.sol
+# paste from codes/SimpleStorage.sol
+
+
+nano truffle-config.js
+# replace with codes/truffle-config.js
+
+nano migrations/2_deploy_contracts.js
+#paste from codes/2_deploy_contracts
+
+
+# in second terminal
+ganache --server.host 127.0.0.1 --server.port 8545
+
+# return to first terminal
+truffle compile
+
+truffle migrate --network development
+

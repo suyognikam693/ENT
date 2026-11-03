@@ -1,0 +1,90 @@
+=====================================================================
+ TASK 1 - Start / verify the Fabric test network + channel,
+          identify participating organisations and peers
+=====================================================================
+
+STEP 1.1  Go to the test network folder
+  $ cd ~/fabric-samples/test-network
+
+STEP 1.2  Is the network already running (examiner "preconfigured" case)?
+  $ docker ps --format 'table {{.Names}}\t{{.Ports}}'
+  (expect if running)  peer0.org1.example.com  :7051 ;  peer0.org2.example.com :9051 ;
+                       orderer.example.com :7050 ; ca_org1, ca_org2, ca_orderer (and chaincode containers dev-peer0...basic)
+  -> If these are present, SKIP to STEP 1.5 (verify only).  If nothing is running continue with 1.3.
+
+STEP 1.3  Start network + create channel (with Certificate Authorities)
+  $ ./network.sh down                                   # clean slate (safe to run)
+  $ ./network.sh up createChannel -c mychannel -ca
+  (expect) "Channel 'mychannel' joined" lines for Org1 and Org2, ends without errors
+  SAY: This starts 2 peer orgs (Org1, Org2), one Raft orderer and 3 CAs; creates channel mychannel and joins both peers.
+
+STEP 1.4  Deploy the chaincode (asset-transfer-basic, Go)
+  $ ./network.sh deployCC -ccn basic -ccp ../asset-transfer-basic/chaincode-go -ccl go
+  (expect) "Chaincode definition committed on channel 'mychannel'" and a query result listing asset1..asset6 at the end
+  SAY: deployCC = package -> install on both peers -> each org approves -> definition committed -> InitLedger.
+
+STEP 1.5  VERIFY - load the Org1 identity
+  $ source ~/fabric-lab/code/env_org1.env
+  (expect) Identity: Org1MSP Admin -> peer0.org1.example.com:7051
+
+STEP 1.6  Verify channel membership and ledger
+  $ peer channel list
+  (expect) Channels peers has joined:  mychannel
+  $ peer channel getinfo -c mychannel
+  (expect) Blockchain info: {"height":N,"currentBlockHash":"...","previousBlockHash":"..."}
+  SAY: height = number of blocks. Write down N, we use it in Task 3.
+
+STEP 1.7  Verify the same for Org2
+  $ source ~/fabric-lab/code/env_org2.env
+  $ peer channel list
+  $ source ~/fabric-lab/code/env_org1.env           # go back to Org1
+
+STEP 1.8  Verify the chaincode is committed and see which orgs approved
+  $ peer lifecycle chaincode querycommitted -C mychannel -n basic
+  (expect) Committed chaincode definition for chaincode 'basic' on channel 'mychannel':
+           Version: 1.0, Sequence: 1, Endorsement Plugin: escc, Validation Plugin: vscc,
+           Approvals: [Org1MSP: true, Org2MSP: true]
+  $ peer lifecycle chaincode queryinstalled
+  (expect) Package ID: basic_1.0:<hash>, Label: basic_1.0
+  SAY: No explicit endorsement policy -> channel default = MAJORITY of orgs = both Org1 and Org2 must endorse.
+
+STEP 1.9  Identify organisations on the channel (read channel configuration)
+  $ peer channel fetch config /tmp/config_block.pb -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com -c mychannel --tls --cafile "$ORDERER_CA"
+  $ configtxlator proto_decode --input /tmp/config_block.pb --type common.Block --output /tmp/config_block.json
+  $ jq '.data.data[0].payload.data.config.channel_group.groups.Application.groups | keys' /tmp/config_block.json
+  (expect) [ "Org1MSP", "Org2MSP" ]
+  $ jq '.data.data[0].payload.data.config.channel_group.groups.Orderer.groups | keys' /tmp/config_block.json
+  (expect) [ "OrdererOrg" ]
+  $ jq -r '.data.data[0].payload.data.config.channel_group.groups.Orderer.values.ConsensusType.value.type' /tmp/config_block.json
+  (expect) etcdraft
+
+
+
+# USE THIS ENTIRE BLOCK FOR RESULT TO SHOW PEERS AND ORGS IN THE network
+
+peer channel fetch config /tmp/config_block.pb -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com -c mychannel --tls --cafile "$ORDERER_CA"
+configtxlator proto_decode --input /tmp/config_block.pb --type common.Block --output /tmp/config_block.json
+
+G='.data.data[0].payload.data.config.channel_group.groups'
+echo "--- Peer orgs on the channel:"
+jq -r "$G.Application.groups | to_entries[] | \"\(.key)  ->  MSP ID: \(.value.values.MSP.value.config.name)\"" /tmp/config_block.json
+echo "--- Orderer org:"
+jq -r "$G.Orderer.groups | to_entries[] | \"\(.key)  ->  MSP ID: \(.value.values.MSP.value.config.name)\"" /tmp/config_block.json
+echo "--- Consensus:"
+jq -r "$G.Orderer.values.ConsensusType.value.type" /tmp/config_block.json
+
+
+
+RESULT TABLE TO SHOW THE EXAMINER
+  Organisation | MSP ID      | Peer / node              | Address         | Role
+  Org1         | Org1MSP     | peer0.org1.example.com   | localhost:7051  | endorser + committer
+  Org2         | Org2MSP     | peer0.org2.example.com   | localhost:9051  | endorser + committer
+  OrdererOrg   | OrdererMSP  | orderer.example.com      | localhost:7050  | ordering service (Raft)
+  CAs          |             | ca_org1:7054, ca_org2:8054, ca_orderer:9054 | issue certificates
+  Channel: mychannel      Chaincode: basic (asset-transfer-basic)
+
+IF IT FAILS
+  - "docker: permission denied"       -> newgrp docker  (or re-login)
+  - "port already in use"             -> ./network.sh down ; docker ps -a ; stop other containers
+  - deployCC fails on "go mod vendor" -> Go missing:  go version ; source ~/.profile
+  - "peer: command not found"         -> you forgot: source ~/fabric-lab/code/env_org1.env

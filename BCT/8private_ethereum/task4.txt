@@ -1,0 +1,114 @@
+cd ~/ethlab
+# METHOD (say it out loud): observe symptom -> isolate -> smallest fix -> verify -> explain effect
+
+# First-response checklist (run whenever something is wrong)
+pgrep -a geth
+ss -ltnp | grep geth
+tail -n 30 logs/node3.log
+geth attach --exec "net.peerCount" node1/geth.ipc
+geth attach --exec "eth.blockNumber" node1/geth.ipc
+
+############################################################
+# FAULT A: STOPPED NODE
+############################################################
+# --- inject (simulates the examiner stopping node3) ---
+pkill -INT -f "datadir node3"
+sleep 4
+pgrep -a geth                                             # only 2 left
+ls node3/geth.ipc                                         # missing
+geth attach --exec "net.peerCount" node1/geth.ipc         # dropped by 1
+geth attach --exec "eth.blockNumber" node1/geth.ipc       # chain still grows
+
+# --- fix: restart ONLY node3 with the same flags ---
+nohup geth --datadir node3 --networkid 1337 --port 30305 --syncmode full \
+  --http --http.port 8547 --http.api eth,net,web3,admin,txpool,personal,clique \
+  --authrpc.port 8553 --nodiscover > logs/node3.log 2>&1 &
+sleep 5
+E1=$(geth attach --exec "admin.nodeInfo.enode" node1/geth.ipc | tr -d '"' | sed 's/\[::\]/127.0.0.1/')
+E2=$(geth attach --exec "admin.nodeInfo.enode" node2/geth.ipc | tr -d '"' | sed 's/\[::\]/127.0.0.1/')
+geth attach --exec "admin.addPeer('$E1')" node3/geth.ipc
+geth attach --exec "admin.addPeer('$E2')" node3/geth.ipc
+sleep 5
+
+# --- verify ---
+geth attach --exec "net.peerCount" node3/geth.ipc
+geth attach --exec "eth.blockNumber" node3/geth.ipc       # catches up with node1
+geth attach --exec "eth.getBlock('latest').hash" node3/geth.ipc
+geth attach --exec "eth.getBlock('latest').hash" node1/geth.ipc
+# EFFECT: network stays alive on the remaining nodes; the stopped node misses blocks,
+#         then re-syncs from peers on restart. If it were the only signer, block
+#         production would stop.
+
+############################################################
+# FAULT B: PEER DISCONNECTION (all processes running, no peers)
+############################################################
+# --- inject ---
+E1=$(geth attach --exec "admin.nodeInfo.enode" node1/geth.ipc | tr -d '"' | sed 's/\[::\]/127.0.0.1/')
+E2=$(geth attach --exec "admin.nodeInfo.enode" node2/geth.ipc | tr -d '"' | sed 's/\[::\]/127.0.0.1/')
+E3=$(geth attach --exec "admin.nodeInfo.enode" node3/geth.ipc | tr -d '"' | sed 's/\[::\]/127.0.0.1/')
+geth attach --exec "admin.removePeer('$E3')" node1/geth.ipc
+geth attach --exec "admin.removePeer('$E3')" node2/geth.ipc
+geth attach --exec "admin.removePeer('$E1')" node3/geth.ipc
+geth attach --exec "admin.removePeer('$E2')" node3/geth.ipc
+sleep 3
+
+# --- diagnose ---
+geth attach --exec "admin.peers.length" node3/geth.ipc    # 0
+geth attach --exec "eth.blockNumber" node1/geth.ipc       # keeps growing
+geth attach --exec "eth.blockNumber" node3/geth.ipc       # stuck / falls behind
+sudo ufw status 2>/dev/null                               # check firewall too
+
+# --- fix (instant, no restart) ---
+geth attach --exec "admin.addPeer('$E1')" node3/geth.ipc
+geth attach --exec "admin.addPeer('$E2')" node3/geth.ipc
+geth attach --exec "admin.addPeer('$E1')" node2/geth.ipc
+sleep 5
+
+# --- verify ---
+geth attach --exec "net.peerCount" node3/geth.ipc
+geth attach --exec "eth.blockNumber" node3/geth.ipc
+geth attach --exec "eth.blockNumber" node1/geth.ipc
+# EFFECT: network partition; the cut-off node falls behind (or forks). After reconnecting
+#         it adopts the canonical chain. addPeer is not saved across restarts.
+
+############################################################
+# FAULT C: CONFIGURATION MISMATCH (wrong networkid on node3)
+############################################################
+# --- inject ---
+pkill -INT -f "datadir node3"
+sleep 4
+nohup geth --datadir node3 --networkid 9999 --port 30305 --syncmode full \
+  --http --http.port 8547 --http.api eth,net,web3,admin,txpool,personal,clique \
+  --authrpc.port 8553 --nodiscover > logs/node3.log 2>&1 &
+sleep 5
+E1=$(geth attach --exec "admin.nodeInfo.enode" node1/geth.ipc | tr -d '"' | sed 's/\[::\]/127.0.0.1/')
+geth attach --exec "admin.addPeer('$E1')" node3/geth.ipc
+sleep 5
+
+# --- diagnose ---
+geth attach --exec "net.version" node1/geth.ipc           # 1337
+geth attach --exec "net.version" node3/geth.ipc           # 9999  (mismatch)
+geth attach --exec "net.peerCount" node3/geth.ipc         # 0
+geth attach --exec "eth.getBlock(0).hash" node3/geth.ipc  # compare genesis too
+
+# --- fix: restart node3 with the correct networkid ---
+pkill -INT -f "datadir node3"
+sleep 4
+nohup geth --datadir node3 --networkid 1337 --port 30305 --syncmode full \
+  --http --http.port 8547 --http.api eth,net,web3,admin,txpool,personal,clique \
+  --authrpc.port 8553 --nodiscover > logs/node3.log 2>&1 &
+sleep 5
+E1=$(geth attach --exec "admin.nodeInfo.enode" node1/geth.ipc | tr -d '"' | sed 's/\[::\]/127.0.0.1/')
+E2=$(geth attach --exec "admin.nodeInfo.enode" node2/geth.ipc | tr -d '"' | sed 's/\[::\]/127.0.0.1/')
+geth attach --exec "admin.addPeer('$E1')" node3/geth.ipc
+geth attach --exec "admin.addPeer('$E2')" node3/geth.ipc
+sleep 5
+
+# --- verify ---
+geth attach --exec "net.version" node3/geth.ipc           # 1337
+geth attach --exec "net.peerCount" node3/geth.ipc
+geth attach --exec "eth.blockNumber" node3/geth.ipc
+# EFFECT: the handshake checks networkid and genesis, so a mismatched node runs
+#         but stays isolated with 0 peers.
+
+# After ANY fix: re-run task2.txt to confirm recovery, then send a test tx (task3.txt).

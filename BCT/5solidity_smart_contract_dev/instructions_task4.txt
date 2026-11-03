@@ -1,0 +1,32 @@
+.exit
+
+#changes contract:
+nano contracts/SimpleStorage.sol
+
+#change:
+require(x <= 100, "Value must be between 0 and 100");
+
+#to:
+require(x <= 50, "Value must be between 0 and 50");
+
+#save compile and deploy
+truffle compile --all
+truffle migrate --reset --network development
+truffle console --network development
+
+#test the modified rule
+let accounts = await web3.eth.getAccounts()
+let instance = await SimpleStorage.deployed()
+
+#try and invalid value:
+await instance.set(75, {from: accounts[0]})
+# expected: (Eexception)Transaction reverted with Value must be between 0 and 50.
+
+#try a valid value:
+let tx2 = await instance.set(40, {from: accounts[0]})
+(await instance.get()).toString()
+
+
+# test access control:
+await instance.set(30, {from: accounts[1]})
+#expected: (Exception)Only owner can update.

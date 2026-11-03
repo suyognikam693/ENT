@@ -1,0 +1,53 @@
+=====================================================================
+ TASK 3 - Update / transfer the asset and verify the changed
+          ledger / world-state information
+=====================================================================
+Prerequisite: Task 2 done (asset7 exists).
+  $ source ~/fabric-lab/code/env_org1.env
+
+STEP 3.1  Record BEFORE state
+  $ q '{"function":"ReadAsset","Args":["asset7"]}' | jq .
+  (expect) Color blue, Size 20, Owner Tomoko, AppraisedValue 500
+  $ height                                  # write the number down = H0
+
+STEP 3.2  UPDATE the asset (change colour, size and value, keep the owner)
+  $ invoke_both '{"function":"UpdateAsset","Args":["asset7","green","25","Tomoko","750"]}'
+  (expect) Chaincode invoke successful. result: status:200
+  $ q '{"function":"ReadAsset","Args":["asset7"]}' | jq .
+  (expect) Color green, Size 25, Owner Tomoko, AppraisedValue 750
+
+STEP 3.3  TRANSFER ownership
+  $ invoke_both '{"function":"TransferAsset","Args":["asset7","Priya"]}'
+  $ q '{"function":"ReadAsset","Args":["asset7"]}' | jq .
+  (expect) Owner Priya   (colour/size/value unchanged: green, 25, 750)
+
+STEP 3.4  VERIFY the WORLD STATE (current values of all assets)
+  $ q '{"function":"GetAllAssets","Args":[]}' | jq .
+
+STEP 3.5  VERIFY the LEDGER (blockchain) - height grew and blocks hold the history
+  $ height                                  # expect H0 + 2   (one block per invoke)
+  Show the two newest blocks (replace N with H0 and H0+1, i.e. the two new block numbers; block numbers start at 0,
+  so height 10 means the newest block is number 9):
+  $ show_block 9          # example number - use YOUR numbers
+  $ show_block newest
+  (expect for the update block)
+     validation result : VALID
+     function + args   : ['UpdateAsset', 'asset7', 'green', '25', 'Tomoko', '750']
+     endorsed by       : ['Org1MSP', 'Org2MSP']
+     READ  asset7  (version block=.. tx=..)
+     WRITE asset7 = {"AppraisedValue":750,"Color":"green","ID":"asset7","Owner":"Tomoko","Size":25}
+  (expect for the transfer block)  WRITE asset7 = {... "Owner":"Priya" ...}
+  SAY: World state shows only the latest value; the blockchain keeps every change forever (old blocks never change).
+
+STEP 3.6  (Optional) show hashes chain the blocks
+  In show_block output compare: block N previous_hash  ==  hash of block N-1  (tamper evident).
+  $ peer channel getinfo -c mychannel     # currentBlockHash / previousBlockHash
+
+STEP 3.7  (Optional) DELETE (if examiner asks)
+  $ invoke_both '{"function":"DeleteAsset","Args":["asset7"]}'
+  $ q '{"function":"AssetExists","Args":["asset7"]}'     (expect false; but the delete is still in the block history)
+
+IF IT FAILS
+  - "the asset asset7 does not exist"  -> run Task 2 first / check id
+  - show_block "cannot fetch block"    -> block number >= height; use "newest" or a smaller number
+  - Query shows old value right after invoke -> wait 2-3 s (block cut timeout) and query again

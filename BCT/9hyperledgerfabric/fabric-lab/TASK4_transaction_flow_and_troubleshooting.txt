@@ -1,0 +1,107 @@
+=====================================================================
+ TASK 4 - Transaction flow  Proposal > Endorsement > Ordering >
+          Validation > Commit   (explain + demonstrate + troubleshoot)
+=====================================================================
+
+PART A - EXPLAIN (draw this on paper or say it)
+
+   CLIENT (peer CLI, Admin@Org1)
+     | 1. PROPOSAL     signed request: channel, chaincode, function, args
+     v
+   ENDORSING PEERS  peer0.org1 + peer0.org2
+     | 2. ENDORSEMENT  each peer SIMULATES the chaincode on its world state, returns a signed
+     |                 read-write set. Nothing is committed yet.
+     v
+   CLIENT  checks the responses match, builds the transaction
+     | 3. ORDERING     sends to orderer.example.com (Raft): orders txs, cuts a BLOCK. Orderer never runs chaincode.
+     v
+   ALL PEERS  receive the block
+        4. VALIDATION  (a) endorsement policy satisfied?  (b) MVCC: are the versions of keys that were read still current?
+        5. COMMIT      append block to ledger (valid AND invalid txs), apply write-sets of VALID txs to world state.
+
+ Query = steps 1-2 on ONE peer only (no ordering/commit)  => no new block.
+
+PART B - DEMONSTRATE WITH A LIVE TRANSACTION
+
+Open TWO terminals.
+
+TERMINAL 2 (logs) - leave it running:
+  $ docker logs -f --since 1s peer0.org1.example.com 2>&1 | grep -Ei "Entry chaincode|Exit chaincode|Validated block|Committed block"
+  (optional third terminal)  $ docker logs -f --since 1s orderer.example.com 2>&1 | grep -Ei "block \["
+
+TERMINAL 1 (commands):
+  $ source ~/fabric-lab/code/env_org1.env
+  STEP 4.1  state + height before
+  $ q '{"function":"ReadAsset","Args":["asset7"]}' | jq .
+  $ height                                                     # = H
+
+  STEP 4.2  show that a QUERY does not create a block
+  $ q '{"function":"ReadAsset","Args":["asset7"]}' > /dev/null ; height          # same number H
+
+  STEP 4.3  run a write transaction and narrate
+  $ invoke_both '{"function":"UpdateAsset","Args":["asset7","green","25","Priya","900"]}'
+  SAY while it runs:
+    1 PROPOSAL     - CLI signs the proposal.
+    2 ENDORSEMENT  - peer0.org1:7051 and peer0.org2:9051 simulate; Terminal 2 shows "Entry chaincode"/"Exit chaincode".
+    3 ORDERING     - CLI submits to orderer:7050; orderer cuts block H (orderer log: "Writing block [H]").
+    4 VALIDATION   - peers check policy + versions ("Validated block [H]").
+    5 COMMIT       - "Committed block [H] with 1 transaction(s)"; CLI prints status:200.
+  $ height                       # H + 1
+  $ q '{"function":"ReadAsset","Args":["asset7"]}' | jq .         # value 900 now in world state
+
+  STEP 4.4  PROVE it in the block itself
+  $ show_block newest
+  Point to:
+    submitted by MSP  -> who made the PROPOSAL
+    endorsed by       -> ['Org1MSP','Org2MSP']  = ENDORSEMENT
+    BLOCK #, hashes   -> ORDERING output (hash chain)
+    validation result -> VALID  = VALIDATION
+    READ/WRITE        -> read-write set, WRITE value is what COMMIT stored in world state
+
+PART C - TROUBLESHOOT: endorsement policy failure (most likely examiner scenario)
+
+  STEP 4.5  See the policy
+  $ peer lifecycle chaincode querycommitted -C mychannel -n basic
+  SAY: no explicit policy => default MAJORITY of 2 orgs => BOTH orgs must endorse.
+
+  STEP 4.6  Reproduce the problem: endorse ONLY with Org1
+  $ H=$(height); echo $H
+  $ invoke_org1 '{"function":"UpdateAsset","Args":["asset7","red","25","Priya","99999"]}'
+  (expect) Error: transaction invalidated with status (ENDORSEMENT_POLICY_FAILURE)
+  SAY: The orderer does not check policies, so the tx was ordered into a block; peers flagged it invalid at VALIDATION.
+
+  STEP 4.7  Diagnose
+  $ height                                                       # H+1  -> a block WAS added
+  $ q '{"function":"ReadAsset","Args":["asset7"]}' | jq .AppraisedValue      # still 900  -> NOT applied
+  $ show_block newest
+  (expect) endorsed by : ['Org1MSP']    validation result : ENDORSEMENT_POLICY_FAILURE
+  $ docker logs --tail 100 peer0.org1.example.com 2>&1 | grep -i ENDORSEMENT_POLICY_FAILURE
+
+  STEP 4.8  Fix: collect both endorsements
+  $ invoke_both '{"function":"UpdateAsset","Args":["asset7","red","25","Priya","2000"]}'
+  $ q '{"function":"ReadAsset","Args":["asset7"]}' | jq .         # value 2000
+  $ show_block newest                                              # VALID, endorsed by both
+
+PART D - OTHER SMALL ISSUES THE EXAMINER MAY GIVE (diagnosis cheat-sheet)
+
+  Symptom / error                                   Cause                                  Fix
+  ------------------------------------------------  -------------------------------------  ----------------------------------------
+  ENDORSEMENT_POLICY_FAILURE                        too few / wrong orgs endorsed          add --peerAddresses for each required org
+  MVCC_READ_CONFLICT                                key changed between simulate & commit  just resubmit (retry)
+  chaincode basic not found / not installed         cc not deployed on that peer/channel   ./network.sh deployCC ... ; queryinstalled
+  access denied / creator org unknown               wrong CORE_PEER_LOCALMSPID/MSP path    source env_org1.env (or env_org2.env)
+  x509: certificate signed by unknown authority     wrong --cafile or TLS root cert        use $ORDERER_CA and $ORG1_TLS/$ORG2_TLS
+  connection refused localhost:7051                 network not running                    ./network.sh up createChannel -c mychannel -ca
+  "asset already exists"/"does not exist"           chaincode business rule                AssetExists / GetAllAssets, change id
+  Policy changed on request ("only Org2 must sign") redeploy with policy                   ./network.sh deployCC -ccn basic -ccp ../asset-transfer-basic/chaincode-go -ccl go -ccep "OR('Org1MSP.peer','Org2MSP.peer')"
+                                                    (then ONE org's endorsement suffices; sequence bumps automatically via -ccs 2 if needed)
+
+  If examiner asks to change the policy to ANY ONE org:
+  $ cd ~/fabric-samples/test-network
+  $ ./network.sh deployCC -ccn basic -ccp ../asset-transfer-basic/chaincode-go -ccl go -ccv 1.1 -ccs 2 -ccep "OR('Org1MSP.peer','Org2MSP.peer')"
+  $ source ~/fabric-lab/code/env_org1.env
+  $ invoke_org1 '{"function":"UpdateAsset","Args":["asset7","red","25","Priya","3000"]}'      # now succeeds with Org1 only
+  $ peer lifecycle chaincode querycommitted -C mychannel -n basic        # shows the new policy
+
+CLEAN UP when finished (optional):
+  $ cd ~/fabric-samples/test-network && ./network.sh down

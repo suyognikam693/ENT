@@ -1,0 +1,14 @@
+truffle console --network development
+
+# get accs:
+let accounts = await web3.eth.getAccounts()
+accounts
+
+#load deployed contract:
+let instance = await SimpleStorage.deployed()
+(await instance.get()).toString()
+
+#change contract state
+let tx = await instance.set(42, {from: accounts[0]})
+(await instance.get()).toString()
+

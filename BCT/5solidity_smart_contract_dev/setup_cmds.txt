@@ -1,0 +1,28 @@
+# setup
+
+sudo apt update && sudo apt install -y curl build-essential git
+
+git clone https://github.com/nvm-sh/nvm.git ~/.nvm
+cd ~/.nvm
+git checkout v0.40.3
+
+cat >> ~/.bashrc <<'EOF'
+
+export NVM_DIR="$HOME/.nvm"
+[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+EOF
+
+source ~/.bashrc
+
+nvm --version
+
+nvm install 18
+nvm use 18
+nvm alias default 18
+
+node -v
+npm -v
+
+npm install -g truffle ganache
+

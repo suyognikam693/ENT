@@ -1,0 +1,94 @@
+CS413 LAB 6 - ACCESSCONTROL.SOL IN REMIX (remix.ethereum.org)
+=============================================================
+
+A. SETUP (ONCE)
+---------------
+1. File Explorer > contracts/ > create AccessControl.sol, paste the code.
+2. Solidity Compiler tab: Compiler = 0.8.20, tick Auto compile,
+   Advanced Configurations > EVM version = paris. Wait for the green tick.
+3. Deploy & Run tab: Environment = Remix VM (Cancun), Gas limit = 3000000.
+
+Accounts:
+   Acc1 = 0x5B38...ddC4  (owner / deployer)
+   Acc2 = 0xAb84...      (honest user)
+   Acc3 = 0x4B20...      (attacker)
+
+
+B. VULNERABLE VERSION - NORMAL USE (Screenshot 1)
+-------------------------------------------------
+Step | Account | Value (Ether) | Action                      | Expected
+-----|---------|---------------|-----------------------------|---------------------------
+1    | Acc1    | 0             | Contract = Wallet, Deploy   | green tick
+2    | Acc1    | 0             | Wallet owner                | Acc1 address (0x5B38...ddC4)
+3    | Acc1    | 3 Ether       | Wallet deposit              | green tick
+4    | Acc1    | 0             | Wallet getBalance           | 3000000000000000000
+5    | Acc1    | 0             | Wallet withdrawAll          | green tick, getBalance = 0
+6    | Acc1    | 3 Ether       | Wallet deposit (again)      | getBalance = 3 ETH (funds for the attack)
+
+Note: step 5 shows owner-only withdrawal works. Step 6 refills the Wallet.
+
+
+C. VULNERABLE VERSION - EXPLOIT (Screenshot 2)
+----------------------------------------------
+Step | Account | Value (Ether) | Action                                              | Expected
+-----|---------|---------------|-----------------------------------------------------|----------------------
+7    | Acc3    | 0             | Wallet setOwner, argument = ACC3 ADDRESS            | green tick
+     |         |               | (copy it from the Account dropdown copy icon)       |
+8    | any     | 0             | Wallet owner                                        | Acc3 address (hijacked)
+9    | Acc3    | 0             | Wallet withdrawAll                                  | green tick
+10   | any     | 0             | Wallet getBalance                                   | 0 (drained)
+
+Result: attacker became owner and stole all funds. EXPLOIT SUCCESS.
+
+
+D. APPLY THE FIX
+----------------
+1. Comment out the vulnerable setOwner() and its comment line.
+2. Uncomment the whole FIXED block (onlyOwner modifier + setOwner).
+   Do NOT leave both setOwner functions active (compile error).
+3. Optional (better): change withdrawAll to
+      function withdrawAll() public onlyOwner {
+   (it is already safe once setOwner is protected, since owner can't be overwritten).
+4. Wait for the green tick.
+5. Click the trash icon in Deployed Contracts.
+6. Redeploy Wallet (Acc1, Value 0).
+
+
+E. FIXED VERSION - EXPLOIT BLOCKED (Screenshot 3)
+-------------------------------------------------
+Step | Account | Value (Ether) | Action                                       | Expected
+-----|---------|---------------|----------------------------------------------|----------------------
+1    | Acc1    | 3 Ether       | Wallet deposit                               | getBalance = 3 ETH
+2    | Acc3    | 0             | Wallet setOwner, argument = ACC3 ADDRESS     | RED REVERT "Not owner"
+3    | any     | 0             | Wallet owner                                 | still Acc1
+4    | Acc3    | 0             | Wallet withdrawAll                           | RED REVERT "Not owner"
+5    | any     | 0             | Wallet getBalance                            | 3000000000000000000 (safe)
+
+Result: only the owner can change ownership. EXPLOIT BLOCKED.
+
+
+F. FIXED VERSION - NORMAL USE STILL WORKS (Screenshot 4)
+--------------------------------------------------------
+Step | Account | Value (Ether) | Action                                       | Expected
+-----|---------|---------------|----------------------------------------------|----------------------
+1    | Acc1    | 0             | Wallet setOwner, argument = ACC2 ADDRESS     | green tick (owner can transfer ownership)
+2    | any     | 0             | Wallet owner                                 | Acc2 address
+3    | Acc2    | 0             | Wallet withdrawAll                           | green tick, getBalance = 0
+4    | Acc2    | 2 Ether       | Wallet deposit                               | green tick (anyone can deposit)
+
+
+RULES TO REMEMBER
+-----------------
+- Value = 0 before EVERY Deploy and every non-payable function.
+- Only deposit takes Value. Unit = Ether.
+- Address arguments are typed in quotes: "0x4B20..." (copy from the Account dropdown).
+- Switch the Account dropdown BEFORE clicking a function (caller matters).
+- Redeploy after changing code (old instances keep the old code).
+- withdrawAll uses transfer, so it sends to msg.sender (the owner).
+
+
+3-LINE SPOKEN EXPLANATION
+-------------------------
+Identify: setOwner() has no access check, so anyone can make themselves the owner.
+Impact:   the attacker becomes owner and calls withdrawAll(), stealing all the funds.
+Fix:      add an onlyOwner modifier (require msg.sender == owner) to setOwner, and reject the zero address.

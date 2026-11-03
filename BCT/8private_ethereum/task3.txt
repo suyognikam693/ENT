@@ -1,0 +1,41 @@
+cd ~/ethlab
+# stay in ONE terminal: uses variables R and TX
+
+# ---------- receiver = an account on node2 ----------
+R=$(geth attach --exec "eth.accounts[0]" node2/geth.ipc | tr -d '"')
+echo "Receiver: $R"
+echo -n "Sender (node1 account): "; geth attach --exec "eth.accounts[0]" node1/geth.ipc
+echo -n "Balance BEFORE (ETH): "; geth attach --exec "web3.fromWei(eth.getBalance('$R'),'ether')" node2/geth.ipc
+
+# ---------- send 1 ETH from node1 ----------
+TX=$(geth attach --exec "eth.sendTransaction({from: eth.accounts[0], to: '$R', value: web3.toWei(1,'ether')})" node1/geth.ipc | tr -d '"')
+echo "TX hash: $TX"
+
+# ---------- observe on node2 (blockNumber null = pending) ----------
+geth attach --exec "eth.getTransaction('$TX')" node2/geth.ipc
+geth attach --exec "txpool.status" node2/geth.ipc
+
+# ---------- wait for the next block (period = 5 s) ----------
+sleep 8
+
+# ---------- observe on node2 and node3 after mining ----------
+geth attach --exec "eth.getTransactionReceipt('$TX')" node2/geth.ipc
+geth attach --exec "eth.getTransaction('$TX')" node3/geth.ipc
+echo -n "Balance AFTER (ETH): "; geth attach --exec "web3.fromWei(eth.getBalance('$R'),'ether')" node3/geth.ipc
+# receipt status 0x1 = success; balance increased by 1
+
+# ---------- same block on all nodes ----------
+B=$(geth attach --exec "eth.getTransaction('$TX').blockNumber" node2/geth.ipc)
+echo "Block number: $B"
+for n in 1 2 3; do echo -n "node$n block $B hash: "; geth attach --exec "eth.getBlock($B).hash" node$n/geth.ipc; done
+geth attach --exec "eth.getBlock($B).transactions" node3/geth.ipc
+geth attach --exec "eth.getBlock($B).miner" node3/geth.ipc
+
+# SAY: signed on node1, gossiped to peers, sits in the txpool, sealed into a block by
+#      the Clique signer, block propagated and validated by node2 and node3.
+
+# ---------- If the tx errors ----------
+# "authentication needed" :
+geth attach --exec "personal.unlockAccount(eth.accounts[0],'lab123',300)" node1/geth.ipc
+# stays pending forever (nobody is sealing) :
+geth attach --exec "eth.mining" node1/geth.ipc

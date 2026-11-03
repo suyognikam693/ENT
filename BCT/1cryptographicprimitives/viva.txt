@@ -1,0 +1,59 @@
+1. What is SHA-256?
+A cryptographic hash function that maps any input to a fixed 256-bit (64 hex characters) digest.
+
+2. Properties of a hash function?
+Deterministic, fast to compute, pre-image resistant (can’t reverse), second pre-image resistant, collision resistant, and avalanche effect.
+
+3. What is the avalanche effect?
+A tiny change in input (1 bit) changes about half the output bits.
+
+4. Why is hashing not encryption?
+It is one-way and has no key, so it can’t be decrypted.
+
+5. What is a digital signature?
+The hash of a message encrypted or signed with the sender’s private key, verifiable with the public key.
+
+6. How does signing work?
+Hash the message, then sign the hash with the private key, giving the signature.
+
+7. How does verification work?
+Hash the received message, use the public key to check the signature against that hash, and accept only if they match.
+
+8. Which key signs and which verifies?
+The private key signs and the public key verifies. Encryption is the opposite (public encrypts, private decrypts).
+
+9. Why sign the hash and not the whole message?
+It is faster, since the output is fixed-size, and it is secure.
+
+10. Which algorithm did you use?
+ECDSA on the secp256k1 curve with SHA-256, the same as Bitcoin and Ethereum.
+
+11. Why ECDSA over RSA?
+Smaller keys (256-bit ECC is roughly as strong as 3072-bit RSA), faster, and less storage and bandwidth.
+
+12. Why did verification fail after modification?
+The message changed, so its hash changed, and the signature no longer matches.
+
+13. What three security properties do signatures provide?
+Integrity, authentication, and non-repudiation.
+
+14. What if the private key is leaked?
+Anyone can forge signatures. In blockchain, funds can be stolen and there is no recovery.
+
+15. How does hashing secure the blockchain?
+Each block contains the previous block’s hash, forming a chain. Changing one block changes all following hashes.
+
+16. Is ECDSA signature the same each time?
+No. It uses a random nonce k, so signatures differ each time but all verify. Reusing k leaks the private key (the PlayStation 3 hack).
+
+17. What is a collision?
+Two different inputs giving the same hash. It is computationally infeasible for SHA-256.
+
+18. What is a public key used for in blockchain?
+Wallet addresses are derived from the public key (hash of it), and nodes use it to verify transactions.
+
+19. Does the signature hide the message?
+No. Signatures give authenticity and integrity, not confidentiality.
+
+20. What are the digest sizes?
+SHA-256 gives 256 bits, 32 bytes, 64 hex characters.

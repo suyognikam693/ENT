@@ -1,0 +1,64 @@
+just run using: python3 pow_lab4.py
+menu driven problem gives all task options with input:
+
+
+Sample output:
+#######
+
+=================================================================
+          LAB 4: PROOF-OF-WORK LAB - MAIN MENU
+=================================================================
+  [1] Task 1: Run PoW Engine Functional Test
+  [2] Task 2: Mine Block & Report Nonce/Hash/Attempts
+  [3] Task 3: Compare Effort Across Multiple Difficulties
+  [4] Task 4: Analyze Target, Difficulty & Probability
+  [5] Run ALL Tasks Sequentially (Full Lab Suite)
+  [0] Exit Program
+=================================================================
+Select an option (0-5): 3
+Enter difficulty values separated by space [Default: 1 2 3 4 5]: 4 5 2
+
+=====================================================================================
+ TASK 3: Mining Difficulty & Computational Effort Comparison
+=====================================================================================
+Diff   | Attempts     | Time (s)   | Growth Factor  | Resulting Hash
+-------------------------------------------------------------------------------------
+4      | 34,225       | 0.0370     | Baseline       | 0000ecf29abf1729d730b91f...
+5      | 2,585,087    | 2.5510     | 75.53x         | 000006a3e330dcbcbfc56775...
+2      | 127          | 0.0002     | 0.00x          | 00d22fae532741393ab93799...
+
+=================================================================
+          LAB 4: PROOF-OF-WORK LAB - MAIN MENU
+=================================================================
+  [1] Task 1: Run PoW Engine Functional Test
+  [2] Task 2: Mine Block & Report Nonce/Hash/Attempts
+  [3] Task 3: Compare Effort Across Multiple Difficulties
+  [4] Task 4: Analyze Target, Difficulty & Probability
+  [5] Run ALL Tasks Sequentially (Full Lab Suite)
+  [0] Exit Program
+=================================================================
+Select an option (0-5): 1
+Enter target difficulty [Default: 2]: 4
+
+=================================================================
+ TASK 1: Proof-of-Work Engine Functional Test (Difficulty: 4)
+=================================================================
+Status:                 PoW Engine Initialized & Working
+Input Data String:      'Lab4_Task1_Initialization_Test'
+Target Prefix Required: '0000'
+Validated Hash Result:  00009a35a700fe048a5809ed7cd3ace56c50d5e6a34ffbc71e2d1a1f76d62f2c
+Nonce Found:            103868
+
+=================================================================
+          LAB 4: PROOF-OF-WORK LAB - MAIN MENU
+=================================================================
+  [1] Task 1: Run PoW Engine Functional Test
+  [2] Task 2: Mine Block & Report Nonce/Hash/Attempts
+  [3] Task 3: Compare Effort Across Multiple Difficulties
+  [4] Task 4: Analyze Target, Difficulty & Probability
+  [5] Run ALL Tasks Sequentially (Full Lab Suite)
+  [0] Exit Program
+=================================================================
+Select an option (0-5): 0
+
+Exiting Proof-of-Work Lab. Goodbye!

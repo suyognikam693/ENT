@@ -1,0 +1,222 @@
+
+1. SETUP (Ubuntu, Node 20)
+--------------------------
+sudo apt update && sudo apt install -y curl build-essential
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+node -v                                  # must be v20.x
+
+mkdir -p ~/lab6 && cd ~/lab6             # put the 4 .sol files HERE
+npm init -y
+npm i ganache ethers@6 solc@0.8.20
+ls *.sol                                 # Reentrancy.sol AccessControl.sol TxOrigin.sol Validation.sol
+
+(solc is a local npm package, so compiling works offline.)
+
+
+2. TERMINAL 1 - START GANACHE (leave it running)
+------------------------------------------------
+cd ~/lab6 && npx ganache --wallet.deterministic --server.port 8545
+
+10 accounts, 1000 ETH each, at http://127.0.0.1:8545
+Restart Ganache (Ctrl+C, run again) to reset all state.
+
+
+3. TERMINAL 2 - NODE REPL + HELPERS
+-----------------------------------
+cd ~/lab6 && node
+
+Type  .editor  then paste the block below, then press Ctrl+D.
+(uses var + functions, so no "already declared" errors)
+
+var fs=require('fs'), solc=require('solc'), {ethers}=require('ethers');
+var E=ethers.parseEther, F=ethers.formatEther;
+var provider=new ethers.JsonRpcProvider('http://127.0.0.1:8545');
+var a=await provider.getSigner(0), b=await provider.getSigner(1), m=await provider.getSigner(2);
+// a = owner/deployer, b = honest user, m = attacker
+function compile(file){
+  var input={language:'Solidity',sources:{[file]:{content:fs.readFileSync(file,'utf8')}},
+    settings:{evmVersion:'paris',outputSelection:{'*':{'*':['abi','evm.bytecode.object']}}}};
+  var out=JSON.parse(solc.compile(JSON.stringify(input)));
+  (out.errors||[]).forEach(e=>{ if(e.severity==='error') console.log(e.formattedMessage) });
+  return out.contracts[file];
+}
+async function deploy(k,name,signer,args=[],value=0n){
+  var f=new ethers.ContractFactory(k[name].abi,'0x'+k[name].evm.bytecode.object,signer);
+  var c=await f.deploy(...args,{value}); await c.waitForDeployment(); return c;
+}
+async function tryTx(label,p){ try{ await (await p).wait(); console.log(label,'-> OK'); return true }
+  catch(e){ console.log(label,'-> REVERTED'); return false } }
+console.log('helpers ready');
+
+
+4. WORKFLOW FOR EACH FILE
+-------------------------
+Step 1: run the test function on the VULNERABLE file  -> screenshot (exploit success)
+Step 2: open a 3rd terminal:  nano X.sol   -> comment out vulnerable block, uncomment fixed block, save
+        (keep exactly ONE version of the function active)
+Step 3: run the SAME test function again in the same REPL (it re-reads the file) -> screenshot (exploit blocked)
+No restart needed. Each test deploys fresh contracts.
+
+
+5. TEST FUNCTIONS (paste each in .editor, Ctrl+D, then run it)
+---------------------------------------------------------------
+
+----- 5.1 REENTRANCY: run  await t1()  -----
+async function t1(){
+  var k=compile('Reentrancy.sol');
+  var bank=await deploy(k,'Bank',a);
+  console.log('=== [1] NORMAL USE ===');
+  await tryTx('User deposits 5 ETH', bank.connect(b).deposit({value:E('5')}));
+  console.log('Bank ETH:',F(await provider.getBalance(bank.target)));
+  console.log('User balance in Bank:',F(await bank.balances(await b.getAddress())));
+  console.log('=== [2] ATTACK ===');
+  var att=await deploy(k,'Attacker',m,[bank.target]);
+  await tryTx('Attacker attack() with 1 ETH', att.attack({value:E('1')}));
+  var bal=await provider.getBalance(bank.target);
+  console.log('Bank ETH after attack:',F(bal));
+  console.log('Attacker contract ETH:',F(await provider.getBalance(att.target)));
+  console.log(bal<E('5') ? 'RESULT: EXPLOIT SUCCESS (funds drained)' : 'RESULT: EXPLOIT BLOCKED');
+  console.log('=== [3] NORMAL USE AFTER ===');
+  await tryTx('Honest user withdraw()', bank.connect(b).withdraw());
+}
+
+Then again write "await t1()"
+
+Vulnerable: Bank ETH after attack = 0, attacker holds 6 ETH, EXPLOIT SUCCESS,
+            step [3] REVERTED (bank already drained - expected).
+Fixed:      attack REVERTED, Bank ETH = 5, EXPLOIT BLOCKED, step [3] OK.
+
+
+----- 5.2 ACCESS CONTROL: run  await t2()  -----
+async function t2(){
+  var k=compile('AccessControl.sol');
+  var w=await deploy(k,'Wallet',a);
+  console.log('=== [1] NORMAL USE ===');
+  await tryTx('Owner deposits 3 ETH', w.deposit({value:E('3')}));
+  console.log('Owner:',await w.owner(),'| Wallet ETH:',F(await provider.getBalance(w.target)));
+  console.log('=== [2] ATTACK ===');
+  await tryTx('Attacker setOwner(attacker)', w.connect(m).setOwner(await m.getAddress()));
+  await tryTx('Attacker withdrawAll()', w.connect(m).withdrawAll());
+  var bal=await provider.getBalance(w.target);
+  console.log('Wallet ETH:',F(bal),'| Owner now:',await w.owner());
+  console.log(bal==0n ? 'RESULT: EXPLOIT SUCCESS (ownership hijacked, funds stolen)' : 'RESULT: EXPLOIT BLOCKED');
+  console.log('=== [3] NORMAL USE AFTER ===');
+  await tryTx('Real owner deposits 1 ETH', w.deposit({value:E('1')}));
+  await tryTx('Real owner withdrawAll()', w.connect(a).withdrawAll());
+}
+Then again write "await t2()"
+
+Vulnerable: both attacker calls OK, Wallet ETH = 0, owner = attacker, EXPLOIT SUCCESS,
+            real owner withdrawAll REVERTED (ownership was stolen - expected).
+Fixed:      both attacker calls REVERTED, Wallet ETH = 3, EXPLOIT BLOCKED,
+            real owner withdrawAll OK.
+
+
+----- 5.3 TX.ORIGIN: run  await t3()  -----
+async function t3(){
+  var k=compile('TxOrigin.sol');
+  var v=await deploy(k,'Victim',a,[],E('5'));      // payable constructor: 5 ETH
+  console.log('=== [1] NORMAL USE ===');
+  await tryTx('Owner transferTo(user, 1 ETH)', v.transferTo(await b.getAddress(),E('1')));
+  console.log('Victim ETH:',F(await provider.getBalance(v.target)));   // 4
+  console.log('=== [2] ATTACK ===');
+  var p=await deploy(k,'Phisher',m);
+  await tryTx('Owner tricked into calling Phisher.attack()', p.connect(a).attack(v.target));
+  var bal=await provider.getBalance(v.target);
+  console.log('Victim ETH after attack:',F(bal));
+  console.log(bal<E('4') ? 'RESULT: EXPLOIT SUCCESS (phished via tx.origin)' : 'RESULT: EXPLOIT BLOCKED');
+  console.log('=== [3] NORMAL USE AFTER ===');
+  await tryTx('Owner transferTo(user, 1 ETH)', v.transferTo(await b.getAddress(),E('1')));
+  await tryTx('Non-owner transferTo (negative test)', v.connect(b).transferTo(await b.getAddress(),E('1')));
+}
+Then again write "await t3()"
+
+Vulnerable: attack OK, Victim ETH = 0, EXPLOIT SUCCESS,
+            owner transferTo REVERTED (contract empty - expected), non-owner REVERTED.
+Fixed:      attack REVERTED, Victim ETH = 4, EXPLOIT BLOCKED,
+            owner transferTo OK, non-owner REVERTED.
+
+
+----- 5.4 INPUT VALIDATION: run  await t4()  -----
+async function t4(){
+  var k=compile('Validation.sol');
+  var v=await deploy(k,'Vault',a);
+  console.log('=== [1] NORMAL USE ===');
+  await tryTx('User deposits 5 ETH', v.connect(b).deposit({value:E('5')}));
+  await tryTx('User withdraw 1 ETH', v.connect(b).withdraw(E('1')));
+  console.log('Vault ETH:',F(await provider.getBalance(v.target)));   // 4
+  console.log('=== [2] ATTACK (attacker has 0 balance) ===');
+  await tryTx('Attacker withdraw 2 ETH (underflow)', v.connect(m).withdraw(E('2')));
+  var bal=await provider.getBalance(v.target);
+  console.log('Vault ETH after attack:',F(bal));
+  console.log('Attacker recorded balance:',(await v.balances(await m.getAddress())).toString());
+  console.log(bal<E('4') ? 'RESULT: EXPLOIT SUCCESS (underflow, stole others funds)' : 'RESULT: EXPLOIT BLOCKED');
+  console.log('=== [3] NORMAL USE AFTER ===');
+  await tryTx('User withdraw 1 ETH', v.connect(b).withdraw(E('1')));
+  await tryTx('User over-withdraw 50 ETH (negative test)', v.connect(b).withdraw(E('50')));
+}
+Then again write "await t4()"
+
+Vulnerable: attacker withdraw OK, Vault ETH = 2, attacker balance = huge number (~1.15e77), EXPLOIT SUCCESS.
+Fixed:      attacker withdraw REVERTED, Vault ETH = 4, attacker balance = 0, EXPLOIT BLOCKED,
+            normal withdraw OK, over-withdraw REVERTED.
+
+
+7. SCREENSHOTS PER VULNERABILITY
+--------------------------------
+(1) Vulnerable run: [1] normal use + [2] RESULT: EXPLOIT SUCCESS
+(2) Fixed run:      [2] attack REVERTED + RESULT: EXPLOIT BLOCKED
+(3) Fixed run:      [3] normal use OK
+Also screenshot the nano diff (vulnerable block commented, fixed block active).
+
+
+8. COMMON ERRORS
+----------------
+Identifier 'x' has already been declared
+    -> use var/functions as above, or .exit and restart node.
+ENOENT: no such file ... .sol
+    -> wrong folder. Run: pwd; ls *.sol   then  cd ~/lab6  and restart node.
+Cannot find module 'solc' / 'ethers'
+    -> you are outside ~/lab6 or skipped npm i. Run npm i ganache ethers@6 solc@0.8.20 in ~/lab6.
+ECONNREFUSED 127.0.0.1:8545
+    -> Ganache is not running. Start Terminal 1.
+EADDRINUSE 8545
+    -> lsof -i :8545 ; kill <PID>
+invalid opcode / PUSH0
+    -> keep evmVersion:'paris' in compile().
+Compile errors printed
+    -> usually both versions of a function active, or an unbalanced block comment. Fix the .sol.
+Cannot read properties of undefined (reading 'abi')
+    -> contract name wrong or compile failed. Check the printed compile error.
+Offline compile
+    -> works, solc is local. Never use loadRemoteVersion.
+Ganache crashes on startup
+    -> nvm install 18 && nvm use 18, reinstall packages.
+Pasted multi-line code breaks
+    -> use .editor mode and press Ctrl+D.
+State is messy / balances unexpected
+    -> Ctrl+C Ganache, restart it, then  .exit  and restart node.
+
+
+9. 3-LINE SPOKEN EXPLANATIONS
+-----------------------------
+REENTRANCY
+  Identify: withdraw() sends ETH before zeroing the balance, so the attacker's receive() calls withdraw() again.
+  Impact:   the attacker drains the Bank repeatedly, stealing other users' deposits.
+  Fix:      Checks-Effects-Interactions (zero balance before sending) plus a nonReentrant lock.
+
+ACCESS CONTROL
+  Identify: setOwner() has no restriction, so anyone can make themselves owner.
+  Impact:   the attacker becomes owner and calls withdrawAll(), stealing all funds.
+  Fix:      add an onlyOwner modifier (require msg.sender == owner) and reject the zero address.
+
+TX.ORIGIN
+  Identify: Victim authorizes with tx.origin, the original signer, not the direct caller.
+  Impact:   if the owner calls a malicious contract (Phisher), it calls Victim and passes the check, draining funds.
+  Fix:      use msg.sender for authorization.
+
+INPUT VALIDATION
+  Identify: withdraw(amt) subtracts inside unchecked with no balance check, so it underflows to a huge number.
+  Impact:   a user with zero balance withdraws real ETH belonging to other depositors.
+  Fix:      require(balances[msg.sender] >= amt) and require(amt > 0), and remove unchecked.

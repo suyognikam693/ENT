@@ -1,0 +1,194 @@
+=====================================================================
+ HYPERLEDGER FABRIC - VIVA QUESTIONS AND ANSWERS
+=====================================================================
+
+---------- A. BASICS ----------
+Q1. What is Hyperledger Fabric?
+A. An open-source, permissioned, modular enterprise blockchain framework (Linux Foundation). Participants are
+   known and identified through certificates (MSP), smart contracts are called chaincode, and consensus is pluggable.
+
+Q2. Permissioned vs permissionless blockchain?
+A. Permissionless (Bitcoin/Ethereum): anyone can join, anonymous, uses PoW/PoS. Permissioned (Fabric): only
+   enrolled, identified members join; higher throughput, privacy, no mining, governance by consortium.
+
+Q3. What is the execute-order-validate architecture?
+A. Fabric first EXECUTES (simulates) the chaincode on endorsing peers, then ORDERS the endorsed transactions,
+   then every peer VALIDATES and commits them. Other platforms do order-execute (every node re-executes
+   everything in order), which hurts scalability, confidentiality and non-determinism handling.
+
+Q4. Main components of Fabric?
+A. Peers (endorsers/committers), orderer(s), channels, ledger (blockchain + world state), chaincode, MSP/CA,
+   client applications (SDK/Gateway), policies.
+
+Q5. What are the two parts of the ledger?
+A. (1) Blockchain: immutable, append-only hash-chained log of all transactions (valid AND invalid).
+   (2) World state: database (LevelDB or CouchDB) holding the CURRENT value of each key; derived from the valid
+   transactions in the blockchain and rebuildable from it.
+
+Q6. What is a channel?
+A. A private sub-network/ledger shared by a subset of organisations. Each channel has its own ledger, members,
+   chaincodes and policies. Here the channel is "mychannel" with Org1 and Org2.
+
+Q7. What is an MSP?
+A. Membership Service Provider: defines which identities (certificates issued by which CAs) are valid members of
+   an organisation and their roles (admin, peer, client, orderer). IDs here: Org1MSP, Org2MSP, OrdererMSP.
+
+Q8. What does the Certificate Authority (CA) do?
+A. Issues X.509 certificates (identities) to users/peers/orderers (enrol/register). The test network starts
+   Fabric CAs with the "-ca" flag (ca_org1, ca_org2, ca_orderer).
+
+---------- B. OUR SETUP (TASK 1) ----------
+Q9. Which organisations, peers and orderer participate in the test network?
+A. Org1 (Org1MSP, peer0.org1.example.com, port 7051), Org2 (Org2MSP, peer0.org2.example.com, port 9051),
+   OrdererOrg (OrdererMSP, orderer.example.com, port 7050, Raft). Channel: mychannel. Chaincode: basic.
+
+Q10. How did you verify the network is up?
+A. "docker ps" for containers; "peer channel list" (peer joined mychannel); "peer channel getinfo -c mychannel"
+   (ledger height); "peer lifecycle chaincode querycommitted" (chaincode committed + org approvals);
+   decoded channel config block to list the orgs.
+
+Q11. What command starts the network, creates the channel and deploys chaincode?
+A. ./network.sh up createChannel -c mychannel -ca     then
+   ./network.sh deployCC -ccn basic -ccp ../asset-transfer-basic/chaincode-go -ccl go
+
+Q12. Explain the chaincode lifecycle (Fabric 2.x).
+A. Package -> Install on each peer -> Approve for each org (approveformyorg) -> Commit definition on the channel
+   (once enough orgs approved, per LifecycleEndorsement policy) -> Invoke. Name, version, sequence and endorsement
+   policy are part of the definition.
+
+Q13. What is the orderer's consensus here?
+A. Raft (crash-fault-tolerant, leader-based). The test network runs a single Raft orderer node. (Fabric 3.x also
+   offers SmartBFT.) Solo and Kafka are removed/deprecated.
+
+Q14. Why does the peer CLI need environment variables like CORE_PEER_LOCALMSPID?
+A. They tell the CLI WHICH IDENTITY (org admin MSP folder), WHICH PEER address and WHICH TLS root cert to use.
+   Changing them switches "who I am". scripts/common.sh has set_org1/set_org2.
+
+---------- C. ASSETS / CHAINCODE (TASKS 2 & 3) ----------
+Q15. What is chaincode?
+A. Smart contract code (Go/Java/JS) running in its own container on peers, defining business logic and the
+   only way to read/write the world state. Here asset-transfer-basic in Go.
+
+Q16. Functions of asset-transfer-basic?
+A. InitLedger, CreateAsset, ReadAsset, UpdateAsset, DeleteAsset, AssetExists, TransferAsset, GetAllAssets.
+   Asset fields: ID, Color, Size, Owner, AppraisedValue.
+
+Q17. Difference between query and invoke?
+A. Query: read-only, answered by ONE peer from its world state, not ordered, creates no block.
+   Invoke: full transaction flow, endorsed, ordered, validated, committed; changes ledger + world state.
+
+Q18. How did you create an asset?
+A. peer chaincode invoke ... -c '{"function":"CreateAsset","Args":["asset7","blue","20","Tomoko","500"]}'
+   with both orgs as endorsers. Verified using ReadAsset.
+
+Q19. How did you transfer an asset?
+A. TransferAsset(id, newOwner): the chaincode reads the asset, changes Owner, writes it back (PutState).
+   Verified owner changed via ReadAsset and by decoding the block's write set.
+
+Q20. Where is the history of the asset kept?
+A. The blockchain keeps every transaction (old and new values in blocks). World state only keeps the latest value.
+   The basic chaincode has no history function (GetHistoryForKey could be added); we use inspect_block.sh.
+
+Q21. What is a read-write set?
+A. Result of simulation: the READ set (keys + versions read) and WRITE set (keys + new values). It is what is
+   endorsed and later checked (MVCC) and applied on commit. Simulation itself does not change the state.
+
+Q22. What is the world-state DB used?
+A. LevelDB by default (key-value, only key/range queries). CouchDB (start with "-s couchdb") adds JSON rich queries.
+
+Q23. What happens on DeleteAsset?
+A. DelState is called: key removed from world state; the delete is still recorded in the block history.
+
+---------- D. TRANSACTION FLOW (TASK 4) ----------
+Q24. Explain the flow Proposal -> Endorsement -> Ordering -> Validation -> Commit.
+A. 1 PROPOSAL: client signs a proposal (channel, chaincode, function, args) and sends it to endorsing peers.
+   2 ENDORSEMENT: each peer verifies the signature/ACL, simulates the chaincode against its world state,
+     returns a signed proposal response containing the read-write set. Ledger is not updated.
+   3 ORDERING: client checks that the responses match, assembles a transaction and sends it to the orderer, which
+     totally orders transactions per channel and cuts them into blocks (does NOT run chaincode or look at content).
+   4 VALIDATION: blocks are delivered to all peers (directly or via gossip). Each peer checks (a) endorsement
+     policy is satisfied and signatures are valid and (b) MVCC - the versions of keys read are still current.
+   5 COMMIT: block appended to the ledger (including invalid txs, flagged in metadata); write sets of VALID
+     transactions applied to the world state; commit event sent to client.
+
+Q25. Which transactions get into a block - only valid ones?
+A. ALL ordered transactions are stored in the block. Invalid ones are flagged (e.g. ENDORSEMENT_POLICY_FAILURE,
+   MVCC_READ_CONFLICT) in block metadata and their write sets are NOT applied to the world state.
+
+Q26. What is an endorsement policy? What is it for our chaincode?
+A. A rule stating which orgs' peers must sign a transaction for it to be valid (e.g. AND('Org1MSP.peer','Org2MSP.peer'),
+   OR, OutOf(n,...), MAJORITY). Our chaincode uses the default = channel LifecycleEndorsement = MAJORITY of
+   orgs = both Org1 and Org2 (2 orgs). Shown in "peer lifecycle chaincode querycommitted".
+
+Q27. In Task 4b, why did the tx endorsed only by Org1 fail?
+A. The policy needs both orgs. The orderer does not check policies, so the tx was ordered and put in a block, but at
+   VALIDATION peers flagged it ENDORSEMENT_POLICY_FAILURE; the world state did not change; the CLI returned
+   "transaction invalidated with status (ENDORSEMENT_POLICY_FAILURE)". Fix: pass --peerAddresses for both orgs.
+
+Q28. What is MVCC_READ_CONFLICT?
+A. Multi-Version Concurrency Control check at validation: if a key read during simulation was changed by an earlier
+   tx in the same/previous block, the later tx is invalid. Prevents double spending / lost update. Fix: retry.
+
+Q29. What does the orderer do and not do?
+A. Does: orders transactions, creates blocks (batch size/timeout), delivers blocks, manages channel config.
+   Does not: execute chaincode, read data (it may not even see payloads of private data), validate endorsement policies,
+   hold the world state.
+
+Q30. What is the role of the anchor peer and gossip?
+A. Gossip disseminates blocks among peers of an org efficiently, elects leaders that pull blocks from the orderer,
+   and anchor peers allow peers of different orgs to discover each other.
+
+Q31. Why are endorsing peers different from committing peers?
+A. Any peer on the channel commits (validates and writes) every block. Only peers where the chaincode is installed
+   and that are targeted by the client act as endorsers. In the test network the same peers do both.
+
+Q32. Why can Fabric tolerate non-deterministic chaincode?
+A. Because endorsers' results are compared; if responses differ (e.g. uses random/time), the client cannot collect
+   matching endorsements and the tx is rejected, instead of corrupting state.
+
+Q33. How is immutability / tamper evidence achieved?
+A. Each block header contains previous_hash and data_hash, forming a hash chain. Changing any block changes all
+   later hashes. Valid and invalid txs are both retained.
+
+Q34. What is the "ledger height"?
+A. Number of blocks in the chain (block 0 = genesis). Shown by "peer channel getinfo". Each successful invoke in
+   the test network typically adds one block (batch timeout 2 s).
+
+Q35. How do you read the logs to show the flow?
+A. docker logs peer0.org1.example.com -> "Entry chaincode"/"Exit chaincode" (endorsement), "Validated block"/
+   "Committed block [N]" (validation+commit); docker logs orderer.example.com -> "Writing block [N]" (ordering).
+   Or decode the block: scripts/inspect_block.sh newest.
+
+---------- E. QUICK TROUBLESHOOTING ANSWERS ----------
+Q36. Invoke fails with "endorsement policy failure". What do you check?
+A. (1) peerAddresses list contains all required orgs (2) chaincode installed/approved on those peers
+   (3) policy via querycommitted (4) logs of peers.
+
+Q37. "access denied" / "creator org unknown"?
+A. Wrong MSP env (CORE_PEER_LOCALMSPID / MSPCONFIGPATH) or identity not a member of the channel. Re-source org env.
+
+Q38. "x509: certificate signed by unknown authority" / TLS errors?
+A. Wrong --cafile for orderer or wrong --tlsRootCertFiles for a peer, or --ordererTLSHostnameOverride missing.
+
+Q39. "chaincode not found / not installed"?
+A. Run deployCC; check queryinstalled and querycommitted; confirm name (-n basic) and channel (-C mychannel).
+
+Q40. "asset already exists" or "does not exist"?
+A. The chaincode itself returns that error: use AssetExists/GetAllAssets, choose a new ID or use UpdateAsset.
+
+---------- F. EXTRA CONCEPTS ----------
+Q41. Private data collections? A. Data shared only among selected orgs on a channel; others see only a hash on-chain.
+Q42. Fabric Gateway? A. Peer-side service (v2.4+) that simplifies client apps: the client submits once and the gateway
+     gathers endorsements, submits to the orderer and waits for commit (SDKs: fabric-gateway for Go/Node/Java).
+Q43. Fabric vs Ethereum? A. Fabric: permissioned, execute-order-validate, chaincode in Go/Java/JS, no native
+     cryptocurrency, channels for privacy. Ethereum: public, order-execute, Solidity, ETH gas.
+Q44. What is a transaction ID? A. Hash of nonce+creator; unique per proposal; used to detect duplicates (DUPLICATE_TXID).
+Q45. How would you add a third organisation? A. ./network.sh up with addOrg3 scripts (test-network/addOrg3), join
+     channel, install and approve chaincode, update policies.
+
+---------- G. DEMO SCRIPT FOR THE EXAMINER (what to say) ----------
+1. "I start/verify the network" -> scripts/01_start_network.sh; point at orgs, peers, orderer, channel, chaincode.
+2. "I create and read an asset" -> scripts/02_create_query_asset.sh; show ReadAsset JSON.
+3. "I update, then transfer" -> scripts/03_update_transfer_asset.sh; show before/after and the block write-set.
+4. "I explain the flow with a live tx" -> scripts/04_transaction_flow_demo.sh; walk through the diagram, logs, block.
+5. "Here is what happens if the policy is not met" -> scripts/05_policy_troubleshoot.sh.

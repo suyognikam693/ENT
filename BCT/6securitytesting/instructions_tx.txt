@@ -1,0 +1,93 @@
+CS413 LAB 6 - TXORIGIN.SOL IN REMIX (remix.ethereum.org)
+========================================================
+
+A. SETUP (ONCE)
+---------------
+1. File Explorer > contracts/ > create TxOrigin.sol, paste the code.
+2. Solidity Compiler tab: Compiler = 0.8.20, tick Auto compile,
+   Advanced Configurations > EVM version = paris. Wait for the green tick.
+3. Deploy & Run tab: Environment = Remix VM (Cancun), Gas limit = 3000000.
+
+Accounts:
+   Acc1 = 0x5B38...ddC4  (victim owner / deployer)
+   Acc2 = 0xAb84...      (honest recipient)
+   Acc3 = 0x4B20...      (attacker, deploys Phisher)
+
+IMPORTANT: Victim's constructor is PAYABLE. Set Value = 5 Ether ONLY when deploying Victim.
+Phisher is deployed with Value = 0.
+
+
+B. VULNERABLE VERSION - NORMAL USE (Screenshot 1)
+-------------------------------------------------
+Step | Account | Value (Ether) | Action                                              | Expected
+-----|---------|---------------|-----------------------------------------------------|---------------------------
+1    | Acc1    | 5 Ether       | Contract = Victim, Deploy                           | green tick
+2    | Acc1    | 0             | Victim owner                                        | Acc1 address
+3    | Acc1    | 0             | Victim getBalance                                   | 5000000000000000000
+4    | Acc1    | 0             | Victim transferTo(ACC2 ADDRESS, 1000000000000000000)| green tick
+5    | Acc1    | 0             | Victim getBalance                                   | 4000000000000000000
+6    | -       | -             | Check Acc2 balance in Account dropdown              | increased by 1 ETH
+
+Note: transferTo is NOT payable, so Value must be 0. The amount is a function argument in WEI.
+
+
+C. VULNERABLE VERSION - EXPLOIT (Screenshot 2)
+----------------------------------------------
+Step | Account | Value (Ether) | Action                                              | Expected
+-----|---------|---------------|-----------------------------------------------------|---------------------------
+7    | Acc3    | 0             | Contract = Phisher, Deploy                          | green tick
+8    | Acc3    | 0             | Phisher attacker                                    | Acc3 address
+9    | Acc1    | 0             | Phisher attack, argument = VICTIM ADDRESS           | green tick
+     |         |               | (copy from the copy icon next to Victim)            |
+10   | any     | 0             | Victim getBalance                                   | 0 (drained)
+11   | -       | -             | Check Acc3 balance in Account dropdown              | increased by 4 ETH
+
+Why Acc1 clicks attack: it simulates the owner being tricked into calling the phishing contract.
+tx.origin = Acc1 (the owner), so the require passes. Funds go to Acc3.
+Result: EXPLOIT SUCCESS.
+
+
+D. APPLY THE FIX
+----------------
+1. Comment out the line:   require(tx.origin == owner, "Not owner");
+2. Uncomment the line:     require(msg.sender == owner, "Not owner");
+   Keep exactly ONE require active.
+3. Wait for the green tick.
+4. Click the trash icon in Deployed Contracts.
+5. Redeploy Victim (Acc1, Value = 5 Ether) and Phisher (Acc3, Value = 0).
+
+
+E. FIXED VERSION - EXPLOIT BLOCKED (Screenshot 3)
+-------------------------------------------------
+Step | Account | Value (Ether) | Action                                              | Expected
+-----|---------|---------------|-----------------------------------------------------|---------------------------
+1    | Acc1    | 0             | Phisher attack, argument = NEW VICTIM ADDRESS       | RED REVERT "Attack failed"
+2    | any     | 0             | Victim getBalance                                   | 5000000000000000000 (safe)
+
+Result: msg.sender is now the Phisher contract, not the owner, so the check fails. EXPLOIT BLOCKED.
+
+
+F. FIXED VERSION - NORMAL USE STILL WORKS (Screenshot 4)
+--------------------------------------------------------
+Step | Account | Value (Ether) | Action                                              | Expected
+-----|---------|---------------|-----------------------------------------------------|---------------------------
+1    | Acc1    | 0             | Victim transferTo(ACC2 ADDRESS, 1000000000000000000)| green tick
+2    | any     | 0             | Victim getBalance                                   | 4000000000000000000
+3    | Acc2    | 0             | Victim transferTo(ACC2 ADDRESS, 1000000000000000000)| RED REVERT "Not owner" (negative test)
+
+
+RULES TO REMEMBER
+-----------------
+- Only the Victim DEPLOY takes Value (5 Ether). Everything else is Value = 0.
+- Amounts in function arguments are in WEI: 1 ETH = 1000000000000000000.
+- Address arguments in quotes: "0xAb84...". Copy from the Account dropdown or the contract copy icon.
+- The attack must be sent from Acc1 (the owner), not Acc3. That is the phishing scenario.
+- Redeploy BOTH contracts after switching to the fix.
+- If you get "no code at address": the Victim deploy failed. Check Value = 5 Ether on deploy.
+
+
+3-LINE SPOKEN EXPLANATION
+-------------------------
+Identify: Victim authorizes with tx.origin, which is the original signer, not the direct caller.
+Impact:   if the owner calls a malicious contract (Phisher), it calls Victim and passes the check, draining all funds.
+Fix:      use msg.sender for authorization, so a calling contract is not mistaken for the owner.

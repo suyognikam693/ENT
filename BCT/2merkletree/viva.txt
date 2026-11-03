@@ -1,0 +1,65 @@
+1. What is a Merkle tree?
+A binary tree where each leaf is the hash of a transaction and each parent is the hash of its two children’s concatenation, ending in one root hash.
+
+2. What is the Merkle root?
+The single top hash that summarises all transactions in a block. It is stored in the block header.
+
+3. Who invented it?
+Ralph Merkle (1979). Bitcoin uses it for transactions.
+
+4. How do you build it?
+Hash every transaction, pair up the hashes, hash each pair together, and repeat until one hash remains.
+
+5. What if the number of transactions is odd?
+The last hash is duplicated (paired with itself), as Bitcoin does.
+
+6. How many hashes are recomputed when one transaction changes?
+log2(n) + 1: the leaf plus one per level up to the root (4 for 8 transactions).
+
+7. Why is the whole tree not recomputed?
+Untouched subtrees keep the same hashes. Only the path from the changed leaf to the root is affected.
+
+8. What is the tree height for n transactions?
+ceil(log2 n). For 8 it is 3; for 1,000,000 it is about 20.
+
+9. What is a Merkle proof (audit path)?
+The sibling hashes along the path from a leaf to the root. A verifier hashes upward and checks that the result equals the known root.
+
+10. How big is a Merkle proof?
+log2(n) hashes, which is O(log n).
+
+11. What is the time complexity of verifying one transaction?
+O(log n), versus O(n) if you rehash everything.
+
+12. Why does changing one transaction change the root?
+The leaf hash changes, so its parent changes, and so on to the root (avalanche effect).
+
+13. Can two different sets of transactions give the same root?
+Only with a hash collision, which is computationally infeasible for SHA-256.
+
+14. What is an SPV (light) client?
+A client that stores only block headers and uses a Merkle proof to verify that a transaction is in a block.
+
+15. What does a Merkle tree give a blockchain?
+Integrity, tamper detection, efficient verification and less storage and bandwidth.
+
+16. Where is the Merkle root stored?
+In the block header, along with the previous block hash, timestamp, nonce and difficulty target.
+
+17. Does the Merkle tree provide confidentiality?
+No, it provides integrity only.
+
+18. Why concatenate hashes before hashing?
+So a parent depends on both children and on their order. Swapping the order gives a different hash.
+
+19. Does the order of transactions matter?
+Yes. Reordering changes the pairs, so the root changes.
+
+20. What is the difference between a hash of all data and a Merkle root?
+Both detect change, but a Merkle tree also allows proving a single transaction’s membership and locating the changed one without rehashing everything.
+
+21. What is the difference between hash chain and Merkle tree?
+A hash chain is linear (verification is O(n)). A Merkle tree is a tree (verification is O(log n)).
+
+22. Which hash function did you use?
+SHA-256, the same as Bitcoin (Bitcoin applies it twice, double SHA-256).

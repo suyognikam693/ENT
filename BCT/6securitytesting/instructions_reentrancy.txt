@@ -1,0 +1,96 @@
+CS413 LAB 6 - REENTRANCY.SOL IN REMIX (remix.ethereum.org)
+=========================================================
+
+A. SETUP (ONCE)
+---------------
+1. Open remix.ethereum.org
+2. File Explorer > contracts/ folder > create Reentrancy.sol and paste the code.
+3. Solidity Compiler tab:
+   - Compiler = 0.8.20
+   - Tick "Auto compile"
+   - Advanced Configurations > EVM version = paris
+   - Wait for the green tick on the compiler icon.
+4. Deploy & Run tab:
+   - Environment = Remix VM (Cancun) (or any Remix VM)
+   - Gas limit = 3000000
+
+Accounts:
+   Acc1 = 0x5B38...ddC4  (deployer)
+   Acc2 = 0xAb84...      (honest user)
+   Acc3 = 0x4B20...      (attacker)
+
+
+B. VULNERABLE VERSION - NORMAL USE  (Screenshot 1)
+--------------------------------------------------
+Step | Account | Value (unit Ether) | Action                          | Expected
+-----|---------|--------------------|---------------------------------|----------------------------
+1    | Acc1    | 0                  | Contract = Bank, click Deploy   | green tick
+2    | Acc2    | 0                  | Bank getBalance                 | 0
+3    | Acc2    | 5 Ether            | Bank deposit                    | green tick
+4    | Acc2    | 0                  | Bank getBalance                 | 5000000000000000000
+5    | Acc2    | 0                  | Bank balances (Acc2 address)    | 5000000000000000000
+6    | Acc2    | 0                  | Bank withdraw                   | green tick, getBalance = 0
+
+
+C. VULNERABLE VERSION - EXPLOIT  (Screenshot 2)
+-----------------------------------------------
+Step | Account | Value (unit Ether) | Action                                              | Expected
+-----|---------|--------------------|-----------------------------------------------------|---------------------
+7    | Acc2    | 5 Ether            | Bank deposit (victim funds)                         | getBalance = 5 ETH
+8    | Acc3    | 0                  | Contract = Attacker, paste BANK ADDRESS in the      | green tick
+     |         |                    | constructor field, click Deploy                     |
+9    | Acc3    | 1 Ether            | Attacker attack                                     | green tick
+10   | any     | 0                  | Bank getBalance                                     | 0 (drained)
+11   | any     | 0                  | Attacker getBalance                                 | 6000000000000000000
+
+Result: attacker put in 1 ETH and got 6 ETH. EXPLOIT SUCCESS.
+
+
+D. APPLY THE FIX
+----------------
+1. Comment out the vulnerable withdraw() and its comment line.
+2. Uncomment the whole FIXED block (locked, nonReentrant modifier, withdraw).
+   DO NOT leave both withdraw functions active (compile error).
+3. Wait for the green tick.
+4. Click the trash icon in Deployed Contracts (clears old instances).
+5. Redeploy Bank (Acc1, Value 0). Copy its NEW address.
+
+
+E. FIXED VERSION - EXPLOIT BLOCKED  (Screenshot 3)
+--------------------------------------------------
+Step | Account | Value (unit Ether) | Action                                  | Expected
+-----|---------|--------------------|-----------------------------------------|----------------------
+1    | Acc2    | 5 Ether            | Bank deposit                            | getBalance = 5 ETH
+2    | Acc3    | 0                  | Deploy Attacker with NEW Bank address   | green tick
+3    | Acc3    | 1 Ether            | Attacker attack                         | RED REVERT
+4    | any     | 0                  | Bank getBalance                         | 5000000000000000000 (safe)
+5    | any     | 0                  | Attacker getBalance                     | 0
+
+Result: re-entry hits require(!locked), the transaction reverts. EXPLOIT BLOCKED.
+
+
+F. FIXED VERSION - NORMAL USE STILL WORKS  (Screenshot 4)
+---------------------------------------------------------
+Step | Account | Value (unit Ether) | Action                          | Expected
+-----|---------|--------------------|---------------------------------|----------------------
+1    | Acc2    | 0                  | Bank balances (Acc2 address)    | 5000000000000000000
+2    | Acc2    | 0                  | Bank withdraw                   | green tick
+3    | Acc2    | 0                  | Bank getBalance                 | 0
+
+
+RULES TO REMEMBER
+-----------------
+- Value = 0 before EVERY Deploy and every non-payable function.
+- Only deposit and attack take Value.
+- Value unit = Ether. Use Wei only for function arguments (1 ETH = 1000000000000000000).
+- Switch the Account dropdown BEFORE clicking a function (caller matters).
+- Copy contract addresses from the copy icon in Deployed Contracts, not the Account dropdown.
+- Bank.getBalance() = whole Bank's ETH. Per-user balance = balances(address).
+- If a deploy fails with "no code found at address": Value was not 0 on Deploy. Reset and redeploy.
+
+
+3-LINE SPOKEN EXPLANATION
+-------------------------
+Identify: withdraw() sends ETH before setting the balance to 0, so the attacker's receive() calls withdraw() again.
+Impact:   the attacker drains the Bank repeatedly, stealing other users' deposits (like the DAO hack).
+Fix:      Checks-Effects-Interactions (set balance to 0 before sending) plus a nonReentrant lock.

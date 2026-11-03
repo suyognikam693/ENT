@@ -1,0 +1,582 @@
+==============================================================================
+LAB 7 - GANACHE / LOCAL ETHEREUM WITH WEB3.JS OR ETHERS.JS
+THEORY + VIVA QUESTIONS (Blockchain Technology)
+==============================================================================
+
+TABLE OF CONTENTS
+  PART A - Lab Overview and Overall Process
+  PART B - Theory: Local Ethereum Nodes, JSON-RPC, and Client Libraries
+  PART C - Task 1: Connecting to Local RPC Endpoint and Querying Accounts/Balances
+  PART D - Task 2: Executing Native Ether and Smart-Contract Transactions
+  PART E - Task 3: Parsing and Analyzing Transaction Receipts and Gas Mechanics
+  PART F - Task 4: Controlled Modifications, Error Handling, and Edge Cases
+  PART G - Worked Example & Code Structure (Complete Node.js Automation Scripts)
+  PART H - Theory: Web3.js vs Ethers.js, Providers, Signers, and Contracts
+  PART I - JSON-RPC Specification, Nonce Management, and Memory Pool Mechanics
+  PART J - Common Mistakes and Examiner Focus
+  PART K - Viva Questions with Answers (Exhaustive)
+  PART L - Quick Revision Cheat Sheet
+
+
+==============================================================================
+PART A - LAB OVERVIEW AND OVERALL PROCESS
+==============================================================================
+
+Goal of the lab
+---------------
+Develop, execute, and analyze Node.js scripts using Web3.js or Ethers.js connected to a local 
+Ethereum blockchain instance (such as Ganache CLI/GUI, Hardhat Network, or Anvil) to demonstrate:
+  1. how client applications establish a JSON-RPC connection to a local Ethereum node,
+  2. how to query account addresses, balances (converting between Wei and Ether), and nonces,
+  3. how to construct, sign, broadcast, and execute native Ether transfer transactions and smart-contract calls,
+  4. how to retrieve and inspect transaction receipts (tx hash, block number, status, gas used, logs),
+  5. how changing parameters (insufficient gas limit, invalid nonce, insufficient balance, bad address) 
+     causes specific network errors or execution reverts.
+
+The four tasks form one pipeline:
+
+  Task 1: Connect the supplied application/script to the preconfigured local Ethereum RPC endpoint and 
+          display available accounts/balances.
+  Task 2: Execute an Ether or smart-contract transaction between specified accounts.
+  Task 3: Obtain and analyze the transaction receipt, including transaction hash, sender, receiver, 
+          block number, status and gas used where applicable.
+  Task 4: Modify the account/value/contract call as instructed, rerun the transaction and explain the 
+          observed change or error.
+
+Overall process
+---------------
+Step 1. Launch a preconfigured local Ethereum node (e.g., Ganache at `http://127.0.0.1:8545`).
+Step 2. Initialize a Node.js project, installing either `ethers` (v5 or v6) or `web3`.
+Step 3. Connect to the RPC endpoint using a Provider instance (`ethers.JsonRpcProvider` or `new Web3(httpProvider)`).
+Step 4. Fetch the list of accounts managed by the node (`eth_accounts`), iterate through them, and retrieve 
+        their balances in Wei (`eth_getBalance`), converting to Ether using formatting utilities (`ethers.formatEther`).
+Step 5. Construct a transaction payload (recipient address, value in Wei, gas limit, gas price/maxFeePerGas).
+Step 6. Sign and broadcast the transaction using an account's private key (Signer / Wallet instance) or node-managed account.
+Step 7. Await transaction mining and capture the Transaction Receipt (`eth_getTransactionReceipt`).
+Step 8. Inspect key receipt properties: Transaction Hash, Block Number, From, To, Status (`0x1` Success), Gas Used, and Effective Gas Price.
+Step 9. Execute a smart contract interaction: instantiate a `Contract` object using its Address and ABI, then execute a state-changing method.
+Step 10. Perform Task 4 modifications as directed by examiner:
+         - Attempt transfer exceeding account balance (Insufficient Funds).
+         - Set gas limit below execution requirement (Out of Gas / Intrinsic Gas Too Low).
+         - Send transaction with an out-of-order Nonce (Nonce Too Low / Nonce Gap).
+         - Call a non-existent contract function or trigger a `require` failure.
+Step 11. Document the exact JSON-RPC error codes and execution revert outputs.
+
+What the examiner checks
+  - Connectivity competence: Correct RPC endpoint URL setup and connection instantiation.
+  - Scripting mastery: Accurate usage of Web3.js / Ethers.js methods for queries and transfers.
+  - Unit conversion accuracy: Proper handling of 18-decimal precision (Wei <-> Ether conversions).
+  - Receipt parsing: Ability to locate and explain `gasUsed`, `effectiveGasPrice`, `status`, and `blockNumber`.
+  - Error diagnosis: Clear explanation of RPC error codes (e.g., `INSUFFICIENT_FUNDS`, `CALL_EXCEPTION`, `NONCE_EXPIRED`).
+
+Good output to show
+  - Console output displaying connected network ID, accounts list, and balances formatted in ETH.
+  - Transaction submission log with a 64-character hex transaction hash.
+  - Formatted printout of the full Transaction Receipt.
+  - Clear demonstration of an intentional error scenario showing the caught exception object.
+
+
+==============================================================================
+PART B - THEORY: LOCAL ETHEREUM NODES, JSON-RPC, AND CLIENT LIBRARIES
+==============================================================================
+
+B.1 What is a Local Ethereum Node?
+----------------------------------
+A local Ethereum node (e.g., Ganache, Hardhat Network, Anvil) is a lightweight, local emulation of the 
+Ethereum blockchain. It provides:
+1. Instant Mining: Blocks are mined instantly upon receiving a transaction (or at set intervals).
+2. Pre-funded Accounts: Generates 10 default accounts pre-loaded with test Ether (e.g., 100 ETH each) and exposed private keys.
+3. Fast Execution & Debugging: Detailed call traces, gas profiling, and console logging without waiting for public testnets.
+4. Customizable Environment: Configurable Chain ID, gas limits, block times, and hardfork specifications.
+
+B.2 The JSON-RPC Protocol
+-------------------------
+Ethereum nodes communicate with external applications over HTTP, WebSockets, or IPC using the **JSON-RPC 2.0** protocol.
+Client libraries (Web3.js / Ethers.js) wrap these low-level JSON-RPC calls into developer-friendly JavaScript functions.
+
+Common Standard JSON-RPC Methods:
+- `eth_blockNumber`: Returns the index of the latest mined block.
+- `eth_accounts`: Returns a list of account addresses owned by the client node.
+- `eth_getBalance`: Returns the balance of an account at a given block.
+- `eth_sendTransaction`: Creates, signs (if node-managed), and broadcasts a transaction.
+- `eth_sendRawTransaction`: Broadcasts a pre-signed raw transaction byte string.
+- `eth_getTransactionReceipt`: Returns the receipt of a transaction by transaction hash.
+- `eth_call`: Executes a view/pure message call locally on the node without creating an on-chain transaction.
+
+B.3 Client Libraries: Web3.js vs Ethers.js
+-----------------------------------------
+- **Web3.js**: The historic standard Ethereum library maintained by ChainSafe. Highly object-oriented; treats accounts and contracts as stateful modules attached to a main Web3 instance.
+- **Ethers.js**: A lightweight, modular library maintained by Richard Moore. Strict separation of concerns between **Providers** (read-only blockchain access) and **Signers** (write access with private keys). Immensely popular in modern dApp development due to strong TypeScript support and immutability.
+
+
+==============================================================================
+PART C - TASK 1: CONNECTING TO LOCAL RPC ENDPOINT AND QUERYING ACCOUNTS/BALANCES
+==============================================================================
+
+C.1 Connecting to the Provider
+------------------------------
+A **Provider** represents an abstraction of a connection to an Ethereum node.
+
+Ethers.js (v6):
+```javascript
+const { ethers } = require("ethers");
+// Connect to local Ganache instance
+const provider = new ethers.JsonRpcProvider("http://127.0.0.1:8545");
+```
+
+Web3.js (v1.x / v4.x):
+```javascript
+const { Web3 } = require("web3");
+const web3 = new Web3("http://127.0.0.1:8545");
+```
+
+C.2 Fetching Accounts and Denominations
+---------------------------------------
+Ethereum handles all financial calculations internally using the smallest atomic unit: **Wei**.
+- $1 \text{ Ether} = 10^{18} \text{ Wei} = 1,000,000,000,000,000,000 \text{ Wei}$
+- $1 \text{ Gwei} = 10^9 \text{ Wei} = 1,000,000,000 \text{ Wei}$
+
+| Unit | Value in Wei | Scientific Notation | Description |
+| :--- | :--- | :--- | :--- |
+| **Wei** | 1 | $10^0$ | Base atomic unit of Ethereum |
+| **Kwei / Babbage** | 1,000 | $10^3$ | Thousands of Wei |
+| **Mwei / Lovelace** | 1,000,000 | $10^6$ | Millions of Wei |
+| **Gwei / Shannon** | 1,000,000,000 | $10^9$ | Gas price unit |
+| **Microether / Szabo** | 1,000,000,000,000 | $10^{12}$ | Micro-denomination |
+| **Milliether / Finney** | 1,000,000,000,000,000 | $10^{15}$ | Milli-denomination |
+| **Ether** | 1,000,000,000,000,000,000 | $10^{18}$ | Main currency unit |
+
+C.3 Fetching and Formatting Balances
+------------------------------------
+Because JavaScript standard numbers lose precision beyond $2^{53}-1$ (9,007,199,254,740,991), 256-bit integers must be handled using `BigInt` (Ethers.js v6 / Web3.js v4) or `BN.js`/`BigNumber.js` (older versions). NEVER perform Ether math using standard JavaScript floating-point arithmetic!
+
+Ethers.js Script snippet:
+```javascript
+async function displayAccounts() {
+    const accounts = await provider.listAccounts();
+    for (let i = 0; i < accounts.length; i++) {
+        const address = accounts[i].address;
+        const balanceWei = await provider.getBalance(address);
+        const balanceEth = ethers.formatEther(balanceWei);
+        console.log(`Account [${i}]: ${address} | Balance: ${balanceEth} ETH`);
+    }
+}
+```
+
+
+==============================================================================
+PART D - TASK 2: EXECUTING NATIVE ETHER AND SMART-CONTRACT TRANSACTIONS
+==============================================================================
+
+D.1 Native Ether Transfer Architecture
+--------------------------------------
+Sending native Ether requires constructing a transaction object containing:
+- `to`: Recipient EOA or Contract Address.
+- `value`: Amount to transfer in Wei.
+- `gasLimit`: Maximum allowed gas units (standard native transfer = 21,000 gas).
+- `gasPrice` / `maxFeePerGas`: Gas fee price.
+- `nonce`: Transaction counter for the sender account.
+
+Executing Native Transfer in Ethers.js:
+```javascript
+const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
+
+const tx = await wallet.sendTransaction({
+    to: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    value: ethers.parseEther("1.5"), // Converts 1.5 ETH to Wei (BigInt)
+    gasLimit: 21000
+});
+
+console.log("Transaction Broadcasted! Hash:", tx.hash);
+```
+
+D.2 Smart Contract Interaction (Read vs Write)
+---------------------------------------------
+To interact with a deployed smart contract, a client library requires two items:
+1. Deployed Contract Address.
+2. Contract ABI (Application Binary Interface).
+
+Executing Contract Read (`view`/`pure` function):
+- Triggers `eth_call`.
+- No signing required, no gas consumed, executes instantly.
+```javascript
+const contract = new ethers.Contract(contractAddress, contractABI, provider);
+const currentValue = await contract.get(); // Read operation
+```
+
+Executing Contract Write (State-changing function):
+- Triggers `eth_sendTransaction` or `eth_sendRawTransaction`.
+- Requires a Signer (wallet with private key), consumes gas, creates a transaction hash.
+```javascript
+const contractWithSigner = contract.connect(wallet);
+const txResponse = await contractWithSigner.set(42); // State-changing call
+const receipt = await txResponse.wait(); // Wait for transaction to be mined into a block
+```
+
+
+==============================================================================
+PART E - TASK 3: PARSING AND ANALYZING TRANSACTION RECEIPTS AND GAS MECHANICS
+==============================================================================
+
+E.1 Anatomy of a Transaction Receipt
+------------------------------------
+Once a transaction is mined, the node returns a receipt containing full execution metrics:
+
+```json
+{
+  "hash": "0x4f8a123b...",
+  "blockNumber": 14,
+  "blockHash": "0x9c3d4e...",
+  "transactionIndex": 0,
+  "from": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+  "to": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+  "gasUsed": "21000",
+  "cumulativeGasUsed": "21000",
+  "effectiveGasPrice": "20000000000",
+  "status": 1,
+  "logs": []
+}
+```
+
+Receipt Fields Explained:
+1. `hash`: Unique 64-character hexadecimal SHA-256 / Keccak-256 identifier of the transaction.
+2. `status`: Integer indicator where `1` (or `0x1`) represents **Success**, and `0` (or `0x0`) represents **Revert / Failure**.
+3. `blockNumber`: Index of the block containing this mined transaction.
+4. `from` & `to`: Sender and recipient public addresses.
+5. `gasUsed`: The exact units of EVM gas consumed to execute the transaction.
+6. `effectiveGasPrice`: Price paid per unit of gas in Wei (20,000,000,000 Wei = 20 Gwei).
+7. `logs`: Array of event log objects emitted by the contract during execution.
+
+E.2 Gas Cost Calculation
+------------------------
+$$\text{Total Transaction Cost (Wei)} = \text{gasUsed} \times \text{effectiveGasPrice}$$
+
+Example Calculation:
+- `gasUsed` = 21,000 units
+- `effectiveGasPrice` = 20 Gwei ($20 \times 10^9 \text{ Wei}$)
+- $\text{Total Fee} = 21,000 \times (20 \times 10^9) = 420,000,000,000,000 \text{ Wei} = 0.00042 \text{ ETH}$
+
+
+==============================================================================
+PART F - TASK 4: CONTROLLED MODIFICATIONS, ERROR HANDLING, AND EDGE CASES
+==============================================================================
+
+F.1 Scenario A: Insufficient Funds (`INSUFFICIENT_FUNDS`)
+--------------------------------------------------------
+- Action: Attempt to send an Ether value greater than the account's available balance (or balance minus gas fee).
+- Mechanics: The node checks `balance >= value + (gasLimit * gasPrice)`. If false, transaction is rejected before broadcast.
+- Expected Error Code: `INSUFFICIENT_FUNDS` / `sender doesn't have enough funds`.
+
+F.2 Scenario B: Gas Limit Below Requirement (`OUT_OF_GAS` / `INTRINSIC_GAS_LOW`)
+-------------------------------------------------------------------------------
+- Case 1 (Intrinsic Gas Too Low): Setting `gasLimit < 21000` for a native transfer. The node rejects it immediately (`intrinsic gas too low`).
+- Case 2 (Execution Out of Gas): Setting gas limit insufficient for complex contract execution (e.g., `gasLimit: 25000` for a contract write requiring 50,000 gas). Execution starts, runs out of gas mid-way, state changes REVERT (`status: 0`), but ALL provided gas is spent.
+
+F.3 Scenario C: Nonce Errors (`NONCE_EXPIRED` / `NONCE_TOO_LOW` / Nonce Gap)
+---------------------------------------------------------------------------
+- Nonce definition: Sequential integer representing the total number of transactions sent from an account.
+- Case 1 (`NONCE_EXPIRED` / `NONCE_TOO_LOW`): Re-using a nonce that has already been confirmed in a mined block.
+- Case 2 (Nonce Gap): Sending a transaction with nonce $N+2$ when nonce $N+1$ has not been seen. The transaction remains stuck in the mempool indefinitely waiting for $N+1$.
+
+F.4 Scenario D: Smart Contract Execution Revert (`CALL_EXCEPTION`)
+-----------------------------------------------------------------
+- Action: Call a contract function with parameters that fail a `require` check or trigger `revert`.
+- Mechanics: EVM executes transaction, hits `revert`, undoes storage updates, sets `status: 0`, returns revert reason string. Ethers.js throws a `CALL_EXCEPTION`.
+
+
+==============================================================================
+PART G - WORKED EXAMPLE & CODE STRUCTURE
+==============================================================================
+
+G.1 Complete Ethers.js (v6) Automation Script
+---------------------------------------------
+Save the following complete Node.js file as `lab7_script.js`:
+
+```javascript
+const { ethers } = require("ethers");
+
+// Connect to local Ganache instance
+const RPC_URL = "http://127.0.0.1:8545";
+const provider = new ethers.JsonRpcProvider(RPC_URL);
+
+// Default Ganache Account 0 Private Key (Replace with your local node key)
+const PRIVATE_KEY_0 = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d";
+
+async function main() {
+    console.log("=================================================");
+    console.log("TASK 1: CONNECT TO RPC & DISPLAY ACCOUNTS");
+    console.log("=================================================");
+    
+    // Fetch network details
+    const network = await provider.getNetwork();
+    console.log(`Connected to Chain ID: ${network.chainId}`);
+
+    // List accounts managed by node
+    const accounts = await provider.listAccounts();
+    console.log(`Found ${accounts.length} accounts:\n`);
+
+    for (let i = 0; i < Math.min(accounts.length, 5); i++) {
+        const addr = accounts[i].address;
+        const balWei = await provider.getBalance(addr);
+        console.log(`Account [${i}]: ${addr} | Balance: ${ethers.formatEther(balWei)} ETH`);
+    }
+
+    console.log("\n=================================================");
+    console.log("TASK 2 & 3: EXECUTE TRANSACTION & PARSE RECEIPT");
+    console.log("=================================================");
+
+    const walletSigner = new ethers.Wallet(PRIVATE_KEY_0, provider);
+    const senderAddress = await walletSigner.getAddress();
+    const recipientAddress = accounts[1].address;
+
+    const transferAmountEth = "2.5";
+    console.log(`Initiating Transfer: ${transferAmountEth} ETH from ${senderAddress} to ${recipientAddress}`);
+
+    // Construct and broadcast transaction
+    const txResponse = await walletSigner.sendTransaction({
+        to: recipientAddress,
+        value: ethers.parseEther(transferAmountEth),
+        gasLimit: 21000
+    });
+
+    console.log(`Transaction Submitted! Hash: ${txResponse.hash}`);
+    console.log("Awaiting block confirmation...");
+
+    // Obtain Transaction Receipt
+    const receipt = await txResponse.wait();
+
+    console.log("\n--- TRANSACTION RECEIPT ANALYSIS ---");
+    console.log(`Transaction Hash   : ${receipt.hash}`);
+    console.log(`Block Number       : ${receipt.blockNumber}`);
+    console.log(`From               : ${receipt.from}`);
+    console.log(`To                 : ${receipt.to}`);
+    console.log(`Status             : ${receipt.status === 1 ? "0x1 (SUCCESS)" : "0x0 (FAILURE)"}`);
+    console.log(`Gas Used           : ${receipt.gasUsed.toString()} units`);
+    console.log(`Effective Gas Price: ${ethers.formatUnits(receipt.fee / receipt.gasUsed, "gwei")} Gwei`);
+    
+    const totalFeeWei = receipt.gasUsed * receipt.fee / receipt.gasUsed; // gasUsed * effectiveGasPrice
+    console.log(`Total Tx Fee Paid  : ${ethers.formatEther(receipt.fee)} ETH`);
+
+    console.log("\n=================================================");
+    console.log("TASK 4: CONTROLLED ERROR MODIFICATION DEMO");
+    console.log("=================================================");
+
+    console.log("Attempting Scenario A: Insufficient Gas Limit (gasLimit = 5000)...");
+    try {
+        const failedTx = await walletSigner.sendTransaction({
+            to: recipientAddress,
+            value: ethers.parseEther("0.1"),
+            gasLimit: 5000 // Intrinsic gas requirement is 21,000!
+        });
+        await failedTx.wait();
+    } catch (error) {
+        console.log(">>> Caught Expected Error!");
+        console.log(`Error Code    : ${error.code}`);
+        console.log(`Error Message : ${error.message.split("(")[0].trim()}`);
+    }
+}
+
+main().catch((err) => {
+    console.error("Unhandled Script Error:", err);
+});
+```
+
+G.2 Expected Output Console Log
+-------------------------------
+```text
+=================================================
+TASK 1: CONNECT TO RPC & DISPLAY ACCOUNTS
+=================================================
+Connected to Chain ID: 1337
+Found 10 accounts:
+
+Account [0]: 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266 | Balance: 100.0 ETH
+Account [1]: 0x70997970C51812dc3A010C7d01b50e0d17dc79C8 | Balance: 100.0 ETH
+Account [2]: 0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC | Balance: 100.0 ETH
+
+=================================================
+TASK 2 & 3: EXECUTE TRANSACTION & PARSE RECEIPT
+=================================================
+Initiating Transfer: 2.5 ETH from 0xf39Fd6... to 0x709979...
+Transaction Submitted! Hash: 0x4f8a123b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f
+Awaiting block confirmation...
+
+--- TRANSACTION RECEIPT ANALYSIS ---
+Transaction Hash   : 0x4f8a123b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f
+Block Number       : 1
+From               : 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
+To                 : 0x70997970C51812dc3A010C7d01b50e0d17dc79C8
+Status             : 0x1 (SUCCESS)
+Gas Used           : 21000 units
+Effective Gas Price: 20.0 Gwei
+Total Tx Fee Paid  : 0.00042 ETH
+
+=================================================
+TASK 4: CONTROLLED ERROR MODIFICATION DEMO
+=================================================
+Attempting Scenario A: Insufficient Gas Limit (gasLimit = 5000)...
+>>> Caught Expected Error!
+Error Code    : INTRINSIC_GAS_TOO_LOW
+Error Message : intrinsic gas too low
+```
+
+
+==============================================================================
+PART H - THEORY: WEB3.JS VS ETHERS.JS, PROVIDERS, SIGNERS, AND CONTRACTS
+==============================================================================
+
+H.1 Core Abstractions in Ethers.js
+----------------------------------
+1. Provider: A read-only abstraction of a connection to the Ethereum network. Queries block state, accounts, transaction receipts, and call responses.
+2. Signer: An abstraction of an Ethereum account that holds a private key capable of signing messages and transactions to authorize state changes.
+3. Contract: An abstraction of a deployed smart contract code, providing direct JavaScript method access to on-chain functions based on its ABI.
+
+H.2 Web3.js Structural Equivalent
+---------------------------------
+In Web3.js, functionality is accessed via sub-modules attached to the `web3` instance:
+- `web3.eth`: Contains core blockchain operations (`getBalance`, `sendTransaction`, `getBlock`).
+- `web3.eth.Contract`: Instantiates smart contract interactions.
+- `web3.utils`: Utility library for conversions (`toWei`, `fromWei`, `keccak256`).
+
+
+==============================================================================
+PART I - JSON-RPC SPECIFICATION, NONCE MANAGEMENT, AND MEMORY POOL MECHANICS
+==============================================================================
+
+I.1 The Lifecycle of a Transaction
+----------------------------------
+1. Construction: Application creates transaction payload (Recipient, Value, Gas Limit, Nonce).
+2. Signing: Wallet signs payload hash using Secp256k1 private key, producing signature values $(r, s, v)$.
+3. Broadcast: Client sends pre-signed raw transaction byte string (`eth_sendRawTransaction`) over RPC.
+4. Mempool Validation: Node checks format, verifies signature, confirms `balance >= value + fee`, and validates nonce. Valid transactions enter the Transaction Pool (Mempool).
+5. Execution & Mining: Miner/validator selects transactions from mempool, executes opcodes on EVM, updates state, packages transactions into a block, and issues Transaction Receipts.
+
+I.2 Account Nonce Rules
+-----------------------
+- Every transaction sent from an account must have a strictly incremental nonce ($0, 1, 2, 3\dots$).
+- Prevention of Replay Attacks: A transaction with a nonce that has already been confirmed is rejected immediately.
+- Ordering Assurance: Transactions from a single sender are executed strictly in order of their nonces.
+
+
+==============================================================================
+PART J - COMMON MISTAKES AND EXAMINER FOCUS
+==============================================================================
+
+Common Mistakes
+---------------
+1. Performing Ether math using standard floating-point numbers (`0.1 + 0.2`), causing precision loss. Always use `parseEther()` / `formatEther()`.
+2. Forgetting to `await` asynchronous calls (`provider.getBalance()`, `tx.wait()`), resulting in unresolved `Promise` output in logs.
+3. Confusing `txResponse` (returned immediately upon broadcast) with `txReceipt` (returned after mining block via `tx.wait()`).
+4. Using an incorrect RPC port (e.g., trying to connect to 8545 when Ganache GUI is running on 7545).
+5. Forgetting that native Ether transfer requires 21,000 gas minimum; setting gas limit lower causes immediate rejection.
+
+Examiner Focus
+--------------
+- RPC Connection Verification: Proving the script dynamically communicates with the local node instance.
+- Accurate Parsing: Demonstrating ability to extract and interpret status codes, gas fees, and block numbers from transaction receipts.
+- Conversion Fluency: Converting seamlessly between Wei, Gwei, and Ether units.
+- Error Code Analysis: Correctly identifying why a modified transaction failed based on the RPC error response.
+
+
+==============================================================================
+PART K - VIVA QUESTIONS WITH ANSWERS (EXHAUSTIVE)
+==============================================================================
+
+------------------------- SECTION 1: CONNECTIVITY & ARCHITECTURE -------------
+
+Q1. What is Ganache?
+A. A local, personal Ethereum blockchain simulator used by developers to deploy contracts, execute transactions, and run tests instantly in a controlled environment without real Ether.
+
+Q2. What is JSON-RPC in the context of Ethereum?
+A. A lightweight, stateless remote procedure call protocol defined in JSON that allows web applications and client libraries to communicate with an Ethereum node over HTTP, WebSockets, or IPC.
+
+Q3. What is the difference between a Provider and a Signer in Ethers.js?
+A. A Provider is a read-only connection to the blockchain used to query state and balances; a Signer is an account abstraction holding a private key capable of signing transactions to modify state.
+
+Q4. What default port does Ganache CLI vs Ganache GUI use?
+A. Ganache CLI typically runs on HTTP port `8545`, whereas Ganache GUI defaults to HTTP port `7545`.
+
+Q5. What is the default Chain ID for local Ganache networks?
+A. Typically Chain ID `1337` or `5777`.
+
+------------------------- SECTION 2: UNITS & DENOMINATIONS -------------------
+
+Q6. What is Wei?
+A. Wei is the smallest atomic unit of Ether ($1 \text{ Ether} = 10^{18} \text{ Wei}$). All calculations on the EVM are computed strictly in Wei integers.
+
+Q7. How many Wei are in 1 Gwei?
+A. $1 \text{ Gwei} = 10^9 \text{ Wei}$ ($1,000,000,000 \text{ Wei}$). Gwei is the standard denomination used for specifying gas prices.
+
+Q8. Why can't we use standard JavaScript numbers to compute Wei balances?
+A. Standard JavaScript numbers use IEEE 754 double-precision floats, which lose precision for integers greater than $2^{53}-1$. EVM 256-bit numbers require arbitrary-precision BigInt representations.
+
+Q9. What utility function converts a Wei BigInt value into a human-readable Ether string in Ethers.js?
+A. `ethers.formatEther(weiValue)`.
+
+------------------------- SECTION 3: TRANSACTIONS & RECEIPTS -----------------
+
+Q10. What fields are required to construct a native Ether transfer transaction?
+A. `to` (recipient address), `value` (amount in Wei), `gasLimit` (typically 21,000), `nonce` (account transaction count), and gas price parameters (`gasPrice` or `maxFeePerGas`).
+
+Q11. What is the difference between a Transaction Response object and a Transaction Receipt object?
+A. Transaction Response is returned immediately when a transaction is signed and broadcasted to the mempool; Transaction Receipt is generated only AFTER the transaction has been mined into a block by a validator.
+
+Q12. What does a `status` code of `1` vs `0` mean in a Transaction Receipt?
+A. Status `1` (`0x1`) signifies the transaction executed successfully; Status `0` (`0x0`) signifies the transaction reverted due to an error or out-of-gas exception.
+
+Q13. How do you calculate the total Ether fee paid for a transaction from its receipt?
+A. $\text{Total Fee (Ether)} = \text{formatEther}(\text{gasUsed} \times \text{effectiveGasPrice})$.
+
+Q14. What is the intrinsic gas cost of a standard native Ether transfer between two EOAs?
+A. Exactly 21,000 gas units.
+
+------------------------- SECTION 4: ERROR HANDLING & EDGE CASES -------------
+
+Q15. What happens if you submit a transaction with a gas limit set to 10,000 for a native Ether transfer?
+A. The node rejects it immediately before broadcasting with an `INTRINSIC_GAS_TOO_LOW` error because native transfers require at least 21,000 gas.
+
+Q16. What happens if a smart contract execution runs Out of Gas (OOG)?
+A. The transaction execution halts, all state changes revert (`status: 0`), but the validator retains the entire gas limit amount provided to compensate for execution work done.
+
+Q17. What is an account Nonce?
+A. An incremental counter recording the number of transactions sent from an account. It prevents replay attacks and enforces strict transaction execution ordering.
+
+Q18. What happens if you send a transaction with a nonce that has already been confirmed?
+A. The node rejects the transaction with a `NONCE_EXPIRED` or `NONCE_TOO_LOW` error.
+
+Q19. What happens if you send a transaction with a nonce of 5 when your account's current nonce is 3?
+A. The transaction enters the mempool but cannot be mined; it stays stuck waiting in a pending state until transactions with nonces 3 and 4 are received.
+
+------------------------- SECTION 5: ADVANCED & INTERACTION MECHANICS ---------
+
+Q20. What is the difference between `eth_call` and `eth_sendTransaction`?
+A. `eth_call` runs a message call locally on the node without creating an on-chain transaction or consuming gas (used for `view`/`pure` functions); `eth_sendTransaction` signs and broadcasts a transaction to the network, consuming gas and updating state.
+
+Q21. What two artifacts are required by Ethers.js/Web3.js to instantiate a smart contract object?
+A. The deployed Contract Address and the Contract Application Binary Interface (ABI).
+
+Q22. What is a Mempool?
+A. Memory Pool: A staging area inside an Ethereum node where valid broadcasted transactions wait until validators pick them up to be mined into a block.
+
+
+==============================================================================
+PART L - QUICK REVISION CHEAT SHEET
+==============================================================================
+
+  RPC Endpoint  : http://127.0.0.1:8545 (Ganache CLI) or http://127.0.0.1:7545 (GUI)
+  Provider      : Read-only node connection (`ethers.JsonRpcProvider`)
+  Signer        : Write-capable wallet holding private key (`ethers.Wallet`)
+  Units         : 1 Ether = 10^18 Wei | 1 Gwei = 10^9 Wei
+  Formatting    : `ethers.formatEther(wei)` | `ethers.parseEther("1.5")`
+  Receipt Data  : hash, blockNumber, status (1=Success, 0=Fail), gasUsed, effectiveGasPrice
+  Tx Fee Formula: Fee in ETH = formatEther(gasUsed * effectiveGasPrice)
+  Native Tx Gas : Exactly 21,000 gas units
+  Read vs Write : `view` functions = `eth_call` (Free); Setters = `eth_sendTransaction` (Gas cost)
+  Common Errors : `INSUFFICIENT_FUNDS`, `INTRINSIC_GAS_TOO_LOW`, `CALL_EXCEPTION`, `NONCE_EXPIRED`
+
+==============================================================================
+END OF DOCUMENT
+==============================================================================
+```
+
+This text file provides the complete, self-contained, and structured theoretical and viva guide for **Lab 7 (Ganache / Local Ethereum with Web3.js or Ethers.js)**, formatted to mirror the depth and style of the earlier lab guides.

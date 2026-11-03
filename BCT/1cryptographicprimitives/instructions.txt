@@ -1,0 +1,28 @@
+Python installation:
+sudo apt update
+sudo apt install python3 python3-pip -y 
+python3 --version
+pip3 --version
+
+Install package: 
+pip3 install cryptography    or    python3 -m pip install cryptography
+
+Verify: 
+python3 -c "import cryptography; print(cryptography.__version__)"
+
+If you get "externally-managed-environment" error on newer Linux:
+       sudo apt install python3-cryptography
+   OR use a virtual environment:
+       python3 -m venv venv
+       source venv/bin/activate
+       pip install cryptography
+
+cd files
+python3 task1_hash.py                       # Task 1: shows SHA-256 digest
+python3 keygen.py                           # create key pair
+python3 task2_sign.py                       # Task 2: sign the transaction
+python3 task3_4_verify.py                   # Task 3: should print VALID
+
+python3 tamper.py                           # make modified copy (10 BTC -> 1000 BTC)
+python3 task1_hash.py tampered.txt          # show hash is completely different
+python3 task3_4_verify.py tampered.txt      # Task 4: should print INVALID

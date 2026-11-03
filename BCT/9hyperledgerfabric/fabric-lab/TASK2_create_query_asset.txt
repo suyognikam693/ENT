@@ -1,0 +1,52 @@
+=====================================================================
+ TASK 2 - Create / query an asset using the chaincode via the CLI
+=====================================================================
+Prerequisite: Task 1 done, network running.
+In a terminal:
+  $ source ~/fabric-lab/code/env_org1.env
+
+Chaincode functions available (asset-transfer-basic):
+  InitLedger | CreateAsset id color size owner appraisedValue | ReadAsset id | UpdateAsset id color size owner appraisedValue
+  TransferAsset id newOwner | DeleteAsset id | AssetExists id | GetAllAssets
+
+STEP 2.1  QUERY first - what is on the ledger now?   (read-only; goes to ONE peer; no block created)
+  $ q '{"function":"GetAllAssets","Args":[]}'
+  (expect) JSON array with asset1..asset6, e.g. {"ID":"asset1","Color":"blue","Size":5,"Owner":"Tomoko","AppraisedValue":300}, ...
+  Pretty print:   $ q '{"function":"GetAllAssets","Args":[]}' | jq .
+  (If the result is empty/null, seed it:  $ invoke_both '{"function":"InitLedger","Args":[]}'   then wait 3 s and query again.)
+
+STEP 2.2  Query a single supplied asset
+  $ q '{"function":"ReadAsset","Args":["asset1"]}' | jq .
+  (expect) {"ID":"asset1","Color":"blue","Size":5,"Owner":"Tomoko","AppraisedValue":300}
+
+STEP 2.3  Note the ledger height BEFORE creating
+  $ height
+
+STEP 2.4  CREATE a new asset   (this is a WRITE -> full transaction flow, endorsed by Org1 + Org2)
+  $ invoke_both '{"function":"CreateAsset","Args":["asset7","blue","20","Tomoko","500"]}'
+  (expect) ... Chaincode invoke successful. result: status:200
+  SAY: The CLI sent the proposal to peer0.org1 and peer0.org2, collected endorsements, sent to the orderer,
+       and waited until the peers committed the block.
+  Argument meaning:  ID=asset7, Color=blue, Size=20, Owner=Tomoko, AppraisedValue=500
+  Examiner gives their own values?  Just replace them:  ["<id>","<color>","<size>","<owner>","<value>"]  (size/value are numbers inside quotes)
+
+STEP 2.5  QUERY the new asset
+  $ q '{"function":"ReadAsset","Args":["asset7"]}' | jq .
+  (expect) {"AppraisedValue":500,"Color":"blue","ID":"asset7","Owner":"Tomoko","Size":20}
+
+STEP 2.6  Prove the ledger changed
+  $ height          (expect: previous height + 1)
+  $ q '{"function":"AssetExists","Args":["asset7"]}'      (expect: true)
+  $ q '{"function":"GetAllAssets","Args":[]}' | jq .        (now 7 assets)
+
+STEP 2.7  (Optional) show that duplicates are rejected
+  $ invoke_both '{"function":"CreateAsset","Args":["asset7","red","1","Bob","1"]}'
+  (expect) Error ... the asset asset7 already exists      <- error comes from the chaincode during simulation, nothing is ordered
+
+SAY (summary): Query reads the world state of one peer. Invoke goes through endorsement, ordering and commit and adds a block.
+
+IF IT FAILS
+  - "command not found: q / invoke_both" -> you did not source the env file in THIS terminal
+  - "chaincode basic not found"          -> Task 1 step 1.4 not done
+  - "access denied"/"MSP"                -> source env_org1.env again
+  - JSON error                           -> use straight quotes, single quotes around the whole JSON

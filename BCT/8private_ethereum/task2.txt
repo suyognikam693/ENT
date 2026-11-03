@@ -1,0 +1,26 @@
+cd ~/ethlab
+
+# ---------- network ID, chain ID, genesis hash (must be IDENTICAL on all 3) ----------
+for n in 1 2 3; do
+  echo "===== node$n ====="
+  echo -n "net.version : "; geth attach --exec "net.version" node$n/geth.ipc
+  echo -n "chainId     : "; geth attach --exec "admin.nodeInfo.protocols.eth.config.chainId" node$n/geth.ipc
+  echo -n "genesis hash: "; geth attach --exec "eth.getBlock(0).hash" node$n/geth.ipc
+  echo -n "peerCount   : "; geth attach --exec "net.peerCount" node$n/geth.ipc
+  echo -n "blockNumber : "; geth attach --exec "eth.blockNumber" node$n/geth.ipc
+  echo -n "latest hash : "; geth attach --exec "eth.getBlock('latest').hash" node$n/geth.ipc
+done
+
+# ---------- node identity and peer details ----------
+geth attach --exec "admin.nodeInfo.enode" node1/geth.ipc
+geth attach --exec "admin.nodeInfo.name" node1/geth.ipc
+geth attach --exec "net.listening" node1/geth.ipc
+geth attach --exec "admin.peers.map(function(p){return p.network.remoteAddress+'  '+p.id.substr(0,10)+'  '+p.name})" node1/geth.ipc
+
+# ---------- consensus and syncing ----------
+geth attach --exec "clique.getSigners()" node1/geth.ipc
+geth attach --exec "eth.syncing" node2/geth.ipc
+geth attach --exec "eth.mining" node1/geth.ipc
+
+# SAY: same networkid + chainId + genesis hash, and peerCount > 0
+#      => all nodes belong to the same private network.

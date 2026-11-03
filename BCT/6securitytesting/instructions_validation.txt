@@ -1,0 +1,100 @@
+CS413 LAB 6 - VALIDATION.SOL (VAULT) IN REMIX (remix.ethereum.org)
+===================================================================
+
+A. SETUP (ONCE)
+---------------
+1. File Explorer > contracts/ > create Validation.sol, paste the code.
+2. Solidity Compiler tab: Compiler = 0.8.20, tick Auto compile,
+   Advanced Configurations > EVM version = paris. Wait for the green tick.
+3. Deploy & Run tab: Environment = Remix VM (Cancun), Gas limit = 3000000.
+
+Accounts:
+   Acc1 = 0x5B38...ddC4  (deployer)
+   Acc2 = 0xAb84...      (honest user, deposits)
+   Acc3 = 0x4B20...      (attacker, has 0 deposit)
+
+Facts about your code:
+- Vault.getBalance() = the Vault's total ETH (address(this).balance).
+- Per-user balance = the "balances" getter (blue button, takes an address).
+- withdraw(uint256 amt) is NOT payable. Value = 0. Amount is in WEI.
+  1 ETH = 1000000000000000000    2 ETH = 2000000000000000000
+
+
+B. VULNERABLE VERSION - NORMAL USE (Screenshot 1)
+-------------------------------------------------
+Step | Account | Value (Ether) | Action                                  | Expected
+-----|---------|---------------|-----------------------------------------|---------------------------
+1    | Acc1    | 0             | Contract = Vault, Deploy                | green tick
+2    | Acc2    | 5 Ether       | Vault deposit                           | green tick
+3    | Acc2    | 0             | Vault getBalance                        | 5000000000000000000
+4    | Acc2    | 0             | Vault balances("ACC2 ADDRESS")          | 5000000000000000000
+5    | Acc2    | 0             | Vault withdraw(1000000000000000000)     | green tick
+6    | Acc2    | 0             | Vault getBalance                        | 4000000000000000000
+7    | Acc2    | 0             | Vault balances("ACC2 ADDRESS")          | 4000000000000000000
+
+
+C. VULNERABLE VERSION - EXPLOIT (Screenshot 2)
+----------------------------------------------
+Step | Account | Value (Ether) | Action                                  | Expected
+-----|---------|---------------|-----------------------------------------|---------------------------
+8    | Acc3    | 0             | Vault balances("ACC3 ADDRESS")          | 0 (attacker has nothing)
+9    | Acc3    | 0             | Vault withdraw(2000000000000000000)     | green tick (should have failed)
+10   | any     | 0             | Vault getBalance                        | 2000000000000000000 (lost 2 ETH)
+11   | any     | 0             | Vault balances("ACC3 ADDRESS")          | huge number (~1.15e77)
+12   | -       | -             | Check Acc3 balance in Account dropdown  | increased by about 2 ETH
+
+Why it works: Acc3 has 0. Inside unchecked, 0 - 2 ETH wraps to 2^256 - 2 ETH.
+There is no balance check, so Vault sends Acc3 2 ETH that belonged to Acc2.
+Result: EXPLOIT SUCCESS (integer underflow, no input validation).
+
+
+D. APPLY THE FIX
+----------------
+1. Comment out the vulnerable withdraw (the one with unchecked) and its comment line.
+2. Uncomment the whole FIXED withdraw (zero check, balance check, normal subtraction).
+   Keep exactly ONE withdraw active (two will not compile).
+3. Wait for the green tick.
+4. Click the trash icon in Deployed Contracts.
+5. Redeploy Vault (Acc1, Value 0).
+
+
+E. FIXED VERSION - EXPLOIT BLOCKED (Screenshot 3)
+-------------------------------------------------
+Step | Account | Value (Ether) | Action                                  | Expected
+-----|---------|---------------|-----------------------------------------|---------------------------
+1    | Acc2    | 5 Ether       | Vault deposit                           | getBalance = 5 ETH
+2    | Acc3    | 0             | Vault withdraw(2000000000000000000)     | RED REVERT "Insufficient balance"
+3    | Acc3    | 0             | Vault withdraw(0)                       | RED REVERT "Zero amount"
+4    | any     | 0             | Vault getBalance                        | 5000000000000000000 (safe)
+5    | any     | 0             | Vault balances("ACC3 ADDRESS")          | 0 (no underflow)
+
+Result: validation stops withdrawals above the caller's balance. EXPLOIT BLOCKED.
+
+
+F. FIXED VERSION - NORMAL USE STILL WORKS (Screenshot 4)
+--------------------------------------------------------
+Step | Account | Value (Ether) | Action                                  | Expected
+-----|---------|---------------|-----------------------------------------|---------------------------
+1    | Acc2    | 0             | Vault withdraw(1000000000000000000)     | green tick
+2    | any     | 0             | Vault getBalance                        | 4000000000000000000
+3    | Acc2    | 0             | Vault balances("ACC2 ADDRESS")          | 4000000000000000000
+4    | Acc2    | 0             | Vault withdraw(5000000000000000000)     | RED REVERT "Insufficient balance"
+                                                                            | (negative test: more than own balance)
+
+
+RULES TO REMEMBER
+-----------------
+- Only deposit takes Value. Everything else is Value = 0. Unit = Ether.
+- withdraw takes the amount in WEI as an argument, not in the Value box.
+- Address arguments go in quotes: "0x4B20...". Copy from the Account dropdown.
+- Switch the Account dropdown BEFORE clicking a function (caller matters).
+- Redeploy after changing code.
+- Exploit needs Acc2's deposit in the Vault first (the Vault must hold ETH to steal).
+- Do not withdraw more than the Vault holds in the exploit step, or it reverts with "Transfer failed".
+
+
+3-LINE SPOKEN EXPLANATION
+-------------------------
+Identify: withdraw(amt) subtracts inside an unchecked block with no balance check, so the balance underflows to a huge number.
+Impact:   a user with zero balance withdraws real ETH that belongs to other depositors.
+Fix:      add require(balances[msg.sender] >= amt) and require(amt > 0), and remove unchecked so Solidity 0.8 checks arithmetic.

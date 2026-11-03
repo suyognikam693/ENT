@@ -1,0 +1,20 @@
+#chk transaction status
+let receipt = await web3.eth.getTransactionReceipt(tx.tx)
+receipt.status
+
+#chk block number
+receipt.blockNumber
+
+#gas used:
+receipt.gasUsed
+
+#tx hash:
+receipt.transactionHash
+
+#sender and rec:
+receipt.from
+receipt.to
+
+#complete details
+let details = await web3.eth.getTransaction(tx.tx)
+details

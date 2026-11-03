@@ -1,0 +1,24 @@
+Python installation:
+sudo apt update
+sudo apt install python3 python3-pip -y
+python3 --version
+pip3 --version
+
+Verify:
+python3 -c "import hashlib; print(hashlib.sha256(b'test').hexdigest())"
+
+Go to the folder:
+cd files
+ls
+(you should see: transactions.txt merkle_lib.py task1_hashes.py task2_merkle_tree.py task3_modify.py task4_compare.py)
+
+Run in this order:
+python3 task1_hashes.py                     # Task 1: SHA-256 hash of every transaction
+python3 task2_merkle_tree.py                # Task 2: builds tree, prints Merkle Root
+python3 task3_modify.py                     # Task 3: modifies TX3, recomputes only its path
+python3 task4_compare.py                    # Task 4: compares roots + Merkle proof demo
+
+Optional (examiner picks a different transaction, 0-based index so 0 = TX1, 5 = TX6):
+python3 task3_modify.py 5 "TX6: Alice pays Frank 300 BTC | Nonce: 1026 | Timestamp: 2026-11-02 10:40"
+python3 task4_compare.py
+

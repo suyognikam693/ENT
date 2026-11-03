@@ -1,0 +1,729 @@
+==============================================================================
+LAB 8 - PRIVATE ETHEREUM NETWORK WITH AT LEAST THREE NODES
+THEORY + VIVA QUESTIONS (Blockchain Technology)
+==============================================================================
+
+TABLE OF CONTENTS
+  PART A - Lab Overview and Overall Process
+  PART B - Theory: Private Ethereum Networks, Network IDs, and Genesis Configuration
+  PART C - Task 1: Starting a 3-Node Private Ethereum Network
+  PART D - Task 2: Verifying Network Membership, Peer Discovery, and Enode URLs
+  PART E - Task 3: Cross-Node Transaction Propagation and Block Verification
+  PART F - Task 4: Troubleshooting Faults (Stopped Node, Peer Disconnection, Genesis Mismatch)
+  PART G - Worked Example & Script Architecture (Geth Commands, Genesis.json, & IPC Logs)
+  PART H - Theory: Consensus Mechanics (PoA / Clique vs. PoW) in Private Nets
+  PART I - P2P Networking, DevP2P, RLPx, and Node Discovery Protocol
+  PART J - Common Mistakes and Examiner Focus
+  PART K - Viva Questions with Answers (Exhaustive)
+  PART L - Quick Revision Cheat Sheet
+
+
+==============================================================================
+PART A - LAB OVERVIEW AND OVERALL PROCESS
+==============================================================================
+
+Goal of the lab
+---------------
+Configure, initialize, run, and troubleshoot a private Ethereum network consisting of at least 3 nodes 
+(e.g., Node 1, Node 2, and Node 3 using Go-Ethereum / Geth, Besu, or custom local testnet scripts) 
+to demonstrate:
+  1. how a custom genesis file (`genesis.json`) establishes a private network with a unique Chain ID and Network ID,
+  2. how nodes establish peer-to-peer (P2P) connections via Enode URLs and static/dynamic peer discovery,
+  3. how a transaction broadcasted from Node 1 propagates across the P2P network, gets included in a block 
+     by a sealer/validator node, and becomes visible and verified on Node 2 and Node 3,
+  4. how to diagnose and resolve network faults (such as a crashed node process, dropped peer links, network ID 
+     mismatches, or genesis hash discrepancies).
+
+The four tasks form one pipeline:
+
+  Task 1: Start the provided private Ethereum network consisting of at least three preinitialized nodes using 
+          the supplied local configuration/scripts.
+  Task 2: Verify that the nodes belong to the same private network and demonstrate peer connectivity/network status.
+  Task 3: Submit a transaction from an account associated with one node and verify/observe the resulting 
+          transaction or block from another node.
+  Task 4: Troubleshoot an examiner-introduced fault or change such as a stopped node, peer disconnection or 
+          configuration mismatch, restore operation and explain the effect.
+
+Overall process
+---------------
+Step 1. Inspect the custom genesis file (`genesis.json`). Verify `chainId`, pre-funded accounts, and consensus rules.
+Step 2. Initialize each node's data directory (`datadir`) using the genesis file:
+        `geth init --datadir ./node1 genesis.json` (repeated for Node 2 and Node 3).
+Step 3. Start Node 1 (Bootstrap/Bootnode), Node 2, and Node 3 on distinct HTTP RPC ports, WebSocket ports, 
+        P2P listening ports, and IPC sockets on localhost (or separate IP addresses).
+Step 4. Open interactive JavaScript consoles or IPC sessions (`geth attach`) for each node.
+Step 5. Retrieve Node 1's Enode address using `admin.nodeInfo.enode`.
+Step 6. Connect Node 2 and Node 3 to Node 1 using `admin.addPeer(enodeUrl)` or via `static-nodes.json`.
+Step 7. Execute Task 2 Verification: Run `net.peerCount` (should return $\ge 2$) and `admin.peers` on each node console 
+        to confirm all 3 nodes are mutually connected and sharing the same genesis block hash (`eth.getBlock(0).hash`).
+Step 8. Execute Task 3 Cross-Node Verification:
+        - Unlock an account on Node 1: `personal.unlockAccount(acc1, "pass")` or submit signed transaction via RPC.
+        - Send Ether from Node 1's account to Node 2's account: `eth.sendTransaction({from: acc1, to: acc2, value: web3.toWei(5, "ether")})`.
+        - Capture the resulting transaction hash on Node 1.
+        - Query the transaction and receipt on Node 2 and Node 3 using `eth.getTransaction(txHash)` and `eth.getTransactionReceipt(txHash)`.
+        - Observe block height synchronization across all nodes: `eth.blockNumber`.
+Step 9. Execute Task 4 Troubleshooting: Diagnose examiner-introduced faults:
+        - Fault A (Stopped Node): Process killed -> Restart process, verify auto-reconnect or re-add peer.
+        - Fault B (Peer Disconnection): Peer dropped -> Check P2P port binding/firewall, re-run `admin.addPeer()`.
+        - Fault C (Network ID / Genesis Mismatch): Node isolated -> Align `--networkid` or re-initialize `datadir` with matching genesis.
+Step 10. Document all corrective commands and explain the root cause to the examiner.
+
+What the examiner checks
+  - Multi-node startup fluency: Correct flags used (`--datadir`, `--networkid`, `--port`, `--http.port`, `--authrpc.port`).
+  - Peer verification mastery: Accurate interpretation of `admin.nodeInfo`, `admin.peers`, and `net.peerCount`.
+  - Transaction visibility: Confirming that a transaction sent on Node 1 is immediately queryable on Node 3.
+  - Systematic troubleshooting: Ability to pinpoint why a node is isolated (Genesis mismatch vs Network ID mismatch vs Port binding error) and restore full mesh connectivity.
+
+Good output to show
+  - Terminal logs showing 3 active node processes running without fatal crashes.
+  - Interactive console output showing `net.peerCount` returning `2` (connected to 2 peers).
+  - Cross-node query showing `eth.getTransactionReceipt(txHash)` returning status `0x1` on a peer node that did NOT submit the transaction.
+  - Successful recovery output after fixing an examiner fault, restoring peer count back to expected levels.
+
+
+==============================================================================
+PART B - THEORY: PRIVATE ETHEREUM NETWORKS, NETWORK IDS, AND GENESIS CONFIGURATION
+==============================================================================
+
+B.1 What is a Private Ethereum Network?
+---------------------------------------
+A private Ethereum network is an independent, isolated blockchain network created by initializing nodes with a custom 
+genesis file and a private Network ID. It does not connect to the Ethereum Mainnet or public testnets (Sepolia, Holesky).
+
+Key Use Cases:
+- Enterprise Blockchains & Consortiums (permissioned participant nodes).
+- High-Throughput Application Testing (zero gas costs for testing).
+- Protocol-Level Debugging and Hardfork Simulation.
+
+B.2 The Genesis Block (`genesis.json`)
+--------------------------------------
+The genesis block is Block 0—the ancestor of all blocks in the chain. Every node in a private network MUST be initialized 
+with the exact same `genesis.json` file to share a common state zero and genesis block hash.
+
+Key `genesis.json` Parameters:
+- `config.chainId`: Unique numerical identifier protecting the network against Cross-Chain Replay Attacks (EIP-155).
+- `config.homesteadBlock`, `config.eip150Block`, etc.: Specifies the block heights at which protocol hardfork upgrades activate.
+- `config.clique` / `config.ethash`: Defines the consensus mechanism (e.g., Proof of Authority settings).
+- `difficulty`: Initial mining difficulty (set low in private networks for rapid block generation).
+- `gasLimit`: Target maximum gas limit per block (e.g., `0x1fffffffffffff` or `30000000`).
+- `alloc`: Pre-allocates test Ether balances to specific account addresses before mining begins.
+
+Example `genesis.json`:
+```json
+{
+  "config": {
+    "chainId": 13370,
+    "homesteadBlock": 0,
+    "eip150Block": 0,
+    "eip155Block": 0,
+    "eip158Block": 0,
+    "byzantiumBlock": 0,
+    "constantinopleBlock": 0,
+    "petersburgBlock": 0,
+    "istanbulBlock": 0,
+    "clique": {
+      "period": 5,
+      "epoch": 30000
+    }
+  },
+  "nonce": "0x0",
+  "timestamp": "0x58ee40ba",
+  "extraData": "0x0000000000000000000000000000000000000000000000000000000000000000070997970C51812dc3A010C7d01b50e0d17dc79C80000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+  "gasLimit": "0x1fffffffffffff",
+  "difficulty": "0x1",
+  "mixHash": "0x0000000000000000000000000000000000000000000000000000000000000000",
+  "alloc": {
+    "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266": { "balance": "0x1000000000000000000000000000" },
+    "0x70997970C51812dc3A010C7d01b50e0d17dc79C8": { "balance": "0x1000000000000000000000000000" }
+  }
+}
+```
+
+B.3 Network ID vs. Chain ID
+---------------------------
+- **Network ID**: Used by the P2P networking layer (`devp2p`) during handshake. Nodes reject peer connections if their Network IDs do not match.
+- **Chain ID**: Used by the EVM transaction signing engine (EIP-155) to derive transaction hashes. Prevents transactions signed for your private net from being replayed on Mainnet or Sepolia.
+- Best Practice: Set `Network ID` equal to `Chain ID` in private networks to prevent confusion.
+
+
+==============================================================================
+PART C - TASK 1: STARTING A 3-NODE PRIVATE ETHEREUM NETWORK
+==============================================================================
+
+C.1 Step 1: Initializing Data Directories
+----------------------------------------
+Before starting nodes, each node must initialize its clean storage folder (`datadir`) with the genesis file:
+
+```bash
+# Initialize Node 1
+geth init --datadir ./node1_data genesis.json
+
+# Initialize Node 2
+geth init --datadir ./node2_data genesis.json
+
+# Initialize Node 3
+geth init --datadir ./node3_data genesis.json
+```
+
+Output Verification:
+Look for the log line: `Successfully wrote genesis state database=lightchain genesis=0xabc123...`.
+Verify that the `genesis` hash output is IDENTICAL across all three node initialization commands.
+
+C.2 Step 2: Launching Node Instances
+-----------------------------------
+When running multiple nodes on a single host machine (`localhost`), every node must be assigned unique network ports to prevent port binding conflicts (`address already in use`):
+
+1. P2P Discovery Port (`--port`): Used for node-to-node peer communication (Default: 30303).
+2. HTTP RPC Port (`--http.port`): Used for dApp / script connections (Default: 8545).
+3. Auth RPC Engine Port (`--authrpc.port`): Used for Consensus Client communication (Default: 8551).
+4. IPC Socket Path (`--ipcpath`): Named pipe for direct console attachment.
+
+Startup Commands:
+
+```bash
+# Launch Node 1 (Bootstrap Node)
+geth --datadir ./node1_data \
+     --networkid 13370 \
+     --port 30303 \
+     --http --http.port 8545 --http.api "eth,net,web3,admin,personal" \
+     --authrpc.port 8551 \
+     --ipcpath ./node1_data/geth.ipc \
+     --allow-insecure-unlock \
+     console
+
+# Launch Node 2 (Peer Node 2)
+geth --datadir ./node2_data \
+     --networkid 13370 \
+     --port 30304 \
+     --http --http.port 8546 --http.api "eth,net,web3,admin,personal" \
+     --authrpc.port 8552 \
+     --ipcpath ./node2_data/geth.ipc \
+     console
+
+# Launch Node 3 (Peer Node 3)
+geth --datadir ./node3_data \
+     --networkid 13370 \
+     --port 30305 \
+     --http --http.port 8547 --http.api "eth,net,web3,admin,personal" \
+     --authrpc.port 8553 \
+     --ipcpath ./node3_data/geth.ipc \
+     console
+```
+
+
+==============================================================================
+PART D - TASK 2: VERIFYING NETWORK MEMBERSHIP, PEER DISCOVERY, AND ENODE URLS
+==============================================================================
+
+D.1 The Enode Identifier Format
+-------------------------------
+An **Enode** URL uniquely identifies an Ethereum node on the P2P network. It encodes the node's public key (ID), IP address, and P2P listening port:
+
+$$\text{enode://<64-byte-node-pubkey>@<IP-Address>:<P2P-Port>}$$
+
+Example Enode URL:
+`enode://a1b2c3d4...99@127.0.0.1:30303`
+
+D.2 Connecting Nodes Manually
+-----------------------------
+1. On Node 1 console, retrieve its Enode address:
+   ```javascript
+   > admin.nodeInfo.enode
+   "enode://9876543210abcdef...001@127.0.0.1:30303"
+   ```
+
+2. On Node 2 console, add Node 1 as a peer:
+   ```javascript
+   > admin.addPeer("enode://9876543210abcdef...001@127.0.0.1:30303")
+   true
+   ```
+
+3. On Node 3 console, add Node 1 as a peer:
+   ```javascript
+   > admin.addPeer("enode://9876543210abcdef...001@127.0.0.1:30303")
+   true
+   ```
+
+D.3 Automated Discovery via `static-nodes.json`
+-----------------------------------------------
+Alternatively, nodes auto-connect on startup if a `static-nodes.json` file containing an array of peer Enode URLs is placed inside each node's `--datadir`:
+
+```json
+[
+  "enode://9876543210abcdef...001@127.0.0.1:30303",
+  "enode://1234567890abcdef...002@127.0.0.1:30304",
+  "enode://abcdef1234567890...003@127.0.0.1:30305"
+]
+```
+
+D.4 Verifying Network Status (Task 2 Output)
+--------------------------------------------
+Execute the following verification commands on all 3 node consoles:
+
+1. Check Peer Count:
+   ```javascript
+   > net.peerCount
+   2
+   ```
+   (Node 1 should show `2`; Node 2 should show `2`; Node 3 should show `2` in a full mesh network).
+
+2. Inspect Peer Array:
+   ```javascript
+   > admin.peers
+   [
+     {
+       caps: ["eth/66", "eth/67"],
+       id: "1234567890abcdef...",
+       name: "Geth/v1.13.0...",
+       network: {
+         localAddress: "127.0.0.1:54321",
+         remoteAddress: "127.0.0.1:30304"
+       },
+       protocols: {
+         eth: { difficulty: 1, head: "0x...", version: 67 }
+       }
+     },
+     ...
+   ]
+   ```
+
+3. Verify Genesis Hash Consistency:
+   ```javascript
+   > eth.getBlock(0).hash
+   "0xd4e56740f876aef8c010b86a40d5f56745a118d0906a34e69aec8c0db1cb8fa3"
+   ```
+   MUST return the EXACT same hash value across Node 1, Node 2, and Node 3!
+
+
+==============================================================================
+PART E - TASK 3: CROSS-NODE TRANSACTION PROPAGATION AND BLOCK VERIFICATION
+==============================================================================
+
+E.1 Execution Workflow Across Nodes
+-----------------------------------
+
+```
+  [ NODE 1 ]                                [ NODE 2 ]                                [ NODE 3 ]
+  Address: Acc_1                            Address: Acc_2                            Address: Acc_3
+  RPC: :8545                                RPC: :8546                                RPC: :8547
+      │                                         │                                         │
+      ├── 1. Submit Tx (from Acc_1 to Acc_2) ──►│                                         │
+      │   (Hash: 0xabc...)                      │                                         │
+      │                                         │                                         │
+      ├════ 2. Broadcast via P2P DevP2P ───────┼────────────────────────────────────────►│
+      │                                         │                                         │
+      │ (Mempool holds Tx)                      │ (Mempool holds Tx)                      │ (Mempool holds Tx)
+      │                                         │                                         │
+      ├── 3. Miner/Sealer Mines Block #N ───────┼────────────────────────────────────────►│
+      │                                         │                                         │
+      │ 4. `eth.getBlock(N)` shows Block #N ───►│ 4. `eth.getBlock(N)` shows Block #N ───►│ 4. `eth.getBlock(N)`
+      │ 5. `eth.getBalance(Acc_2)` updated ────►│ 5. `eth.getBalance(Acc_2)` updated ────►│ 5. Query Tx Receipt
+```
+
+E.2 Step-by-Step Task 3 Commands
+--------------------------------
+
+Step 1: Obtain Accounts
+- Node 1 Account: `acc1 = eth.accounts[0]` (e.g., `0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266`).
+- Node 2 Account: `acc2 = eth.accounts[0]` (e.g., `0x70997970C51812dc3A010C7d01b50e0d17dc79C8`).
+
+Step 2: Submit Transaction from Node 1 Console
+```javascript
+// On Node 1 Console
+> personal.unlockAccount(eth.accounts[0], "password123", 300)
+true
+
+> txHash = eth.sendTransaction({
+    from: eth.accounts[0],
+    to: "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    value: web3.toWei(10, "ether"),
+    gas: 21000
+  })
+"0x8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b"
+```
+
+Step 3: Observe Transaction Propagation on Node 2 Console
+Before the block is mined, query the transaction pool / pending transaction on Node 2:
+```javascript
+// On Node 2 Console
+> tx = eth.getTransaction("0x8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b")
+{
+  blockHash: null,
+  blockNumber: null,
+  from: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  to: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+  value: 10000000000000000000,
+  gas: 21000,
+  hash: "0x8a9b0c1d..."
+}
+```
+*Key Insight*: Node 2 can see the pending transaction in its local mempool BEFORE it is mined into a block!
+
+Step 4: Block Mining & Synchronization
+Start miner on Node 1 (or designated Clique sealer node):
+```javascript
+// On Node 1 Console
+> miner.start(1)
+null
+// Wait for block to mine...
+> miner.stop()
+true
+```
+
+Step 5: Verify Mined Transaction and Receipt on Node 3 Console
+Query Node 3 (which was neither the sender nor the miner):
+```javascript
+// On Node 3 Console
+> receipt = eth.getTransactionReceipt("0x8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b")
+{
+  blockHash: "0x3c4d5e...",
+  blockNumber: 15,
+  from: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  to: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+  gasUsed: 21000,
+  status: "0x1"
+}
+
+> web3.fromWei(eth.getBalance("0x70997970C51812dc3A010C7d01b50e0d17dc79C8"), "ether")
+"110"  // Balance updated dynamically across the P2P mesh!
+```
+
+
+==============================================================================
+PART F - TASK 4: TROUBLESHOOTING FAULTS (STOPPED NODE, PEER DISCONNECTION, GENESIS MISMATCH)
+==============================================================================
+
+Task 4 requires diagnosing an examiner-introduced fault. Below are the 4 standard fault scenarios:
+
+------------------------------------------------------------------------------
+FAULT SCENARIO 1: STOPPED / CRASHED NODE PROCESS
+------------------------------------------------------------------------------
+Symptom:
+- Node 2 console becomes unresponsive or terminates.
+- Running `net.peerCount` on Node 1 drops from `2` to `1`.
+- Running `admin.peers` on Node 1 shows Node 2 missing from the peer list.
+
+Diagnosis:
+Check active operating system processes using terminal commands:
+```bash
+ps aux | grep geth
+```
+Confirm that Node 2's PID (Process ID) is no longer running.
+
+Resolution Steps:
+1. Re-launch Node 2 process using its exact original flags (`--datadir ./node2_data --port 30304 ...`).
+2. Re-attach to Node 2 console (`geth attach ./node2_data/geth.ipc`).
+3. If auto-discovery is disabled, manually re-add peer from Node 2:
+   `admin.addPeer("enode://<Node1_Enode>")`.
+4. Verify recovery: `net.peerCount` returns `2`. Block height (`eth.blockNumber`) automatically catches up to Node 1.
+
+------------------------------------------------------------------------------
+FAULT SCENARIO 2: PEER DISCONNECTION / P2P PORT FIREWALL BLOCK
+------------------------------------------------------------------------------
+Symptom:
+- All node processes are running, but `net.peerCount` returns `0`.
+- Calling `admin.addPeer(...)` returns `true`, but `admin.peers` remains empty `[]`.
+
+Diagnosis:
+1. Inspect P2P port bindings: Node 1 and Node 2 were accidentally configured with conflicting `--port` values or bound to `127.0.0.1` while running on different physical machines.
+2. Check network listening status:
+   ```bash
+   netstat -tuln | grep 3030
+   ```
+
+Resolution Steps:
+1. Ensure distinct `--port` values (`30303`, `30304`, `30305`) on single-host setups.
+2. If nodes are on separate physical VMs/machines, ensure `--nat extip:<IP>` is set and port `30303` TCP/UDP is open in the OS firewall (`ufw allow 30303`).
+3. Re-execute `admin.addPeer()`. Confirm `admin.peers[0].network.remoteAddress` shows connected status.
+
+------------------------------------------------------------------------------
+FAULT SCENARIO 3: NETWORK ID MISMATCH
+------------------------------------------------------------------------------
+Symptom:
+- Nodes fail to establish peer connections.
+- Node logs display: `P2P handshake failed: Network ID mismatch` or `Peer rejected`.
+
+Diagnosis:
+Check `--networkid` flag across node startup scripts:
+- Node 1: `--networkid 13370`
+- Node 2: `--networkid 9999`  <-- FAULT DETECTED!
+
+Resolution Steps:
+1. Stop Node 2 process (`kill <PID>` or `exit` in console).
+2. Restart Node 2 with corrected flag: `--networkid 13370`.
+3. Call `admin.addPeer()`. Handshake succeeds immediately.
+
+------------------------------------------------------------------------------
+FAULT SCENARIO 4: GENESIS BLOCK / CHAIN ID MISMATCH
+------------------------------------------------------------------------------
+Symptom:
+- Nodes connect briefly then immediately disconnect.
+- Node logs display: `Genesis mismatch` or `Split brain: genesis block hash differs`.
+
+Diagnosis:
+Compare genesis hashes across nodes:
+- Node 1 Console: `eth.getBlock(0).hash` -> `0xd4e567...`
+- Node 2 Console: `eth.getBlock(0).hash` -> `0x1a2b3c...` <-- FAULT DETECTED! Node 2 was initialized with a different `genesis.json` or default Mainnet genesis.
+
+Resolution Steps:
+1. Stop Node 2.
+2. Reset Node 2's corrupt database:
+   ```bash
+   geth removedb --datadir ./node2_data
+   ```
+3. Re-initialize Node 2 using the CORRECT shared `genesis.json`:
+   ```bash
+   geth init --datadir ./node2_data genesis.json
+   ```
+4. Restart Node 2 and connect. Genesis hashes now match.
+
+
+==============================================================================
+PART G - WORKED EXAMPLE & SCRIPT ARCHITECTURE
+==============================================================================
+
+G.1 Automated 3-Node Startup Shell Script (`start_network.sh`)
+--------------------------------------------------------------
+
+```bash
+#!/bin/bash
+
+echo "================================================="
+echo "INITIALIZING 3-NODE PRIVATE ETHEREUM NETWORK"
+echo "================================================="
+
+# Clean previous data (Optional for fresh lab run)
+rm -rf ./node1_data ./node2_data ./node3_data
+
+# Step 1: Initialize all 3 nodes with identical genesis file
+geth init --datadir ./node1_data genesis.json
+geth init --datadir ./node2_data genesis.json
+geth init --datadir ./node3_data genesis.json
+
+echo "================================================="
+echo "STARTING NODES AS BACKGROUND PROCESSES"
+echo "================================================="
+
+# Step 2: Launch Node 1 (Bootstrap)
+geth --datadir ./node1_data \
+     --networkid 13370 \
+     --port 30303 \
+     --http --http.port 8545 --http.api "eth,net,web3,admin,personal,miner" \
+     --authrpc.port 8551 \
+     --ipcpath ./node1_data/geth.ipc \
+     --allow-insecure-unlock \
+     > ./node1.log 2>&1 &
+NODE1_PID=$!
+echo "Node 1 started (PID: $NODE1_PID) on HTTP :8545 | P2P :30303"
+
+sleep 2
+
+# Step 3: Launch Node 2
+geth --datadir ./node2_data \
+     --networkid 13370 \
+     --port 30304 \
+     --http --http.port 8546 --http.api "eth,net,web3,admin,personal" \
+     --authrpc.port 8552 \
+     --ipcpath ./node2_data/geth.ipc \
+     > ./node2.log 2>&1 &
+NODE2_PID=$!
+echo "Node 2 started (PID: $NODE2_PID) on HTTP :8546 | P2P :30304"
+
+# Step 4: Launch Node 3
+geth --datadir ./node3_data \
+     --networkid 13370 \
+     --port 30305 \
+     --http --http.port 8547 --http.api "eth,net,web3,admin,personal" \
+     --authrpc.port 8553 \
+     --ipcpath ./node3_data/geth.ipc \
+     > ./node3.log 2>&1 &
+NODE3_PID=$!
+echo "Node 3 started (PID: $NODE3_PID) on HTTP :8547 | P2P :30305"
+
+sleep 3
+echo "Network running successfully! Attach via: geth attach ./node1_data/geth.ipc"
+```
+
+G.2 JavaScript Automation Script for Node Interconnection (`connect_peers.js`)
+------------------------------------------------------------------------------
+
+```javascript
+// Run via: geth attach ./node2_data/geth.ipc --exec "loadScript('connect_peers.js')"
+
+console.log("Connecting Node 2 to Node 1...");
+
+// Enode of Node 1
+var node1Enode = "enode://9876543210abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef@127.0.0.1:30303";
+
+var success = admin.addPeer(node1Enode);
+console.log("AddPeer Result: " + success);
+
+console.log("Current Peer Count: " + net.peerCount);
+```
+
+
+==============================================================================
+PART H - THEORY: CONSENSUS MECHANICS (POA / CLIQUE VS. POW) IN PRIVATE NETS
+==============================================================================
+
+H.1 Proof of Authority (PoA / Clique Consensus)
+-----------------------------------------------
+In private Ethereum networks, Proof of Work (Ethash) is rarely used because it wastes computational resources. Instead, private networks use **Clique Proof of Authority (PoA)**:
+
+- Authorized Signers: A designated set of account addresses (defined in `genesis.json` `extraData`) are authorized to sign blocks.
+- Block Period (`period`): Blocks are generated at fixed time intervals (e.g., every 5 seconds).
+- Rotation Rule: Signers take turns producing blocks. A single signer cannot produce consecutive blocks ($N/2 + 1$ signer consensus requirement).
+- Efficiency: Zero CPU/GPU overhead; deterministic block production.
+
+H.2 `extraData` Encoding in Clique
+----------------------------------
+In a Clique genesis block, the `extraData` hex field carries the pre-funded authorized signer addresses:
+- Bytes 0-31: 32 bytes of vanity prefix data.
+- Bytes 32 to $32 + (N \times 20) - 1$: Array of 20-byte authorized signer account addresses.
+- Last 65 Bytes: Reserved for proposer signature payload.
+
+
+==============================================================================
+PART I - P2P NETWORKING, DEVP2P, RLPX, AND NODE DISCOVERY PROTOCOL
+==============================================================================
+
+I.1 The DevP2P Protocol Stack
+-----------------------------
+Ethereum nodes communicate over a custom peer-to-peer network stack:
+
+1. RLPx Transport Protocol: Encrypted, authenticated transport protocol operating over TCP. Establishes secure communication channels between nodes using ECDH keys.
+2. Node Discovery Protocol (v4 / v5): Operating over UDP port 30303. Uses a Kademlia-based Distributed Hash Table (DHT) to discover peer nodes on the network automatically.
+3. `eth` Sub-protocol: Handles high-level blockchain synchronization (`eth/66`, `eth/67`, `eth/68`):
+   - `NewBlockHashes`: Announces new blocks mined.
+   - `Transactions`: Propagates newly received unconfirmed transactions.
+   - `GetBlockHeaders` / `BlockHeaders`: Fetches block history during node sync.
+
+
+==============================================================================
+PART J - COMMON MISTAKES AND EXAMINER FOCUS
+==============================================================================
+
+Common Mistakes
+---------------
+1. Re-using port numbers (`--port 30303` or `--http.port 8545`) for multiple nodes on the same local host machine, causing instant process termination.
+2. Forgetting to initialize new nodes with `geth init` before running `geth`, forcing the node to default to Ethereum Mainnet genesis.
+3. Setting matching Network IDs but using different `genesis.json` files, causing `Genesis mismatch` drops.
+4. Unlocking an account without setting `--allow-insecure-unlock` when HTTP RPC APIs are enabled in modern Geth versions.
+5. Confusing Network ID with Chain ID.
+6. Expecting transactions to complete on Node 2 when no miner/sealer node is active in the network.
+
+Examiner Focus
+--------------
+- Command Line Competency: Mastery over Geth flags (`--datadir`, `--networkid`, `--port`, `--http`).
+- Peer Diagnostics: Ability to query `admin.nodeInfo`, `admin.peers`, and `net.peerCount`.
+- Synchronization Verification: Demonstrating that sending Ether on Node 1 alters balances on Node 2 and Node 3.
+- Rapid Fault Recovery: Methodically isolating and repairing examiner faults within minutes.
+
+
+==============================================================================
+PART K - VIVA QUESTIONS WITH ANSWERS (EXHAUSTIVE)
+==============================================================================
+
+------------------------- SECTION 1: PRIVATE NETWORK ARCHITECTURE ------------
+
+Q1. What is a private Ethereum network?
+A. An isolated, custom Ethereum blockchain network running on a separate Network ID/Chain ID with a custom genesis block, completely independent of Mainnet and public testnets.
+
+Q2. What is the role of `genesis.json`?
+A. It defines the initial state zero of the blockchain, including chain configuration, hardfork activation block heights, pre-allocated account balances, initial block gas limit, and consensus parameters.
+
+Q3. What is an Enode URL?
+A. A URI format identifying a node on the P2P network, consisting of the node's 64-byte public key, IP address, and P2P listening port (`enode://pubkey@ip:port`).
+
+Q4. What is the difference between Network ID and Chain ID?
+A. Network ID is used during P2P handshake (`devp2p`) to connect compatible nodes; Chain ID is used by EIP-155 in transaction signature hashing to prevent cross-chain replay attacks.
+
+Q5. How do you initialize a node directory with a custom genesis file in Geth?
+A. `geth init --datadir ./path_to_data genesis.json`.
+
+------------------------- SECTION 2: PEER NETWORKING & DISCOVERY ------------
+
+Q6. What CLI flags must be distinct when running 3 nodes on the same physical host machine?
+A. `--datadir`, `--port` (P2P), `--http.port` (RPC), `--authrpc.port`, and `--ipcpath`.
+
+Q7. What Geth JavaScript command adds a peer manually?
+A. `admin.addPeer("enode://...")`.
+
+Q8. What command checks how many peers a node is connected to?
+A. `net.peerCount`.
+
+Q9. What is `static-nodes.json`?
+A. A JSON file placed in a node's data directory containing an array of Enode URLs that the node automatically connects to upon startup.
+
+Q10. What underlying transport protocol does DevP2P use for node communication?
+A. RLPx over TCP (for encrypted node-to-node communication) and UDP (for node discovery).
+
+------------------------- SECTION 3: TRANSACTIONS & SYNCHRONIZATION ---------
+
+Q11. How does a transaction submitted on Node 1 reach Node 2 and Node 3?
+A. Node 1 broadcasts the transaction payload via DevP2P `Transactions` message to connected peers; peers validate and add it to their local mempool before a miner packages it into a block.
+
+Q12. What command unlocks an account on a Geth node console?
+A. `personal.unlockAccount(address, password, duration_in_seconds)`.
+
+Q13. How do you check if Node 2 has synchronized its block height with Node 1?
+A. Compare `eth.blockNumber` on both node consoles; they must return the exact same integer block height.
+
+Q14. How can you verify that a transaction was successful from a peer node console?
+A. Execute `eth.getTransactionReceipt(txHash)` on the peer node console and check `status: "0x1"`.
+
+------------------------- SECTION 4: TROUBLESHOOTING & FAULTS ----------------
+
+Q15. If `admin.addPeer()` returns `true` but `net.peerCount` remains `0`, what are the likely causes?
+A. Network ID mismatch, genesis block hash mismatch, or a firewall blocking the P2P TCP port.
+
+Q16. What happens if a node is initialized without a custom `genesis.json`?
+A. Geth defaults to initializing the data directory with the Ethereum Mainnet genesis block, causing instant peer disconnection from private nodes due to genesis hash mismatch.
+
+Q17. What error appears in node logs when two nodes have different Network IDs?
+A. `P2P handshake failed: Network ID mismatch` or `Peer rejected`.
+
+Q18. How do you recover a node whose local database has become corrupted or desynchronized with the network?
+A. Stop the node, run `geth removedb --datadir ./node_data`, re-initialize with `geth init --datadir ./node_data genesis.json`, and restart.
+
+------------------------- SECTION 5: CONSENSUS MECHANICS --------------------
+
+Q19. What consensus mechanism is typically used in private Ethereum testnets instead of Proof of Work?
+A. Proof of Authority (PoA / Clique), where pre-approved authorized signer nodes produce blocks at fixed time intervals.
+
+Q20. Where are authorized signers defined in a Clique genesis file?
+A. Inside the `extraData` hexadecimal string field of the `genesis.json` file.
+
+Q21. What is the role of `--allow-insecure-unlock` in Geth?
+A. It permits unlocking accounts over HTTP RPC interfaces (which Geth disables by default in modern versions for security).
+
+Q22. How do you start a CPU miner on a Geth node console?
+A. `miner.start(1)` (starts mining with 1 thread); stop with `miner.stop()`.
+
+
+==============================================================================
+PART L - QUICK REVISION CHEAT SHEET
+==============================================================================
+
+  Init Node     : `geth init --datadir ./node_data genesis.json`
+  Start Node    : `geth --datadir ./node1 --networkid 13370 --port 30303 --http --http.port 8545 console`
+  Enode URI     : `admin.nodeInfo.enode` -> `enode://pubkey@ip:port`
+  Add Peer      : `admin.addPeer("enode://...")`
+  Check Peer    : `net.peerCount` (Must be > 0) | `admin.peers`
+  Verify Genesis: `eth.getBlock(0).hash` (MUST match across ALL nodes!)
+  Submit Tx     : `eth.sendTransaction({from: acc1, to: acc2, value: web3.toWei(1, "ether")})`
+  Check Status  : `eth.getTransactionReceipt(txHash)` on peer node -> `status: "0x1"`
+  Fault 1       : Peer Count 0 + Same Host -> Check port conflicts (`--port 30303` vs `30304`)
+  Fault 2       : Peer Disconnects -> Network ID mismatch (`--networkid`)
+  Fault 3       : Genesis Mismatch -> Run `geth removedb` and re-init with correct `genesis.json`
+
+==============================================================================
+END OF DOCUMENT
+==============================================================================
+```
+
+### Key Highlights of this Lab 8 Guide:
+- **Comprehensive Multi-Node Coverage:** Detailed step-by-step instructions for starting 3 distinct node processes on localhost with unique datadirs, ports, and IPC paths.
+- **Task-by-Task Alignment:** Complete breakdowns for Genesis initialization (Task 1), Peer Verification & Enode linking (Task 2), Cross-node transaction broadcasting & mempool parsing (Task 3), and Systematic Troubleshooting (Task 4).
+- **In-Depth Troubleshooting Matrix:** Solutions for the 4 primary examiner fault scenarios (crashed nodes, P2P port blocks, network ID mismatches, and genesis split-brain bugs).
+- **Exhaustive Viva Collection:** 22 detailed viva questions and answers categorized into 5 sections covering multi-node architectures, P2P networking protocols (`devp2p`, RLPx), cross-node synchronization, and Clique Proof-of-Authority consensus.

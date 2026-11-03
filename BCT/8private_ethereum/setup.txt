@@ -1,0 +1,59 @@
+# ---------- 1. INSTALL GEOTH 1.13.15 (internet needed, once) ----------
+sudo apt update && sudo apt install -y curl tar
+cd ~
+curl -LO https://gethstore.blob.core.windows.net/builds/geth-linux-amd64-1.13.15-c5ba367e.tar.gz
+tar xzf geth-linux-amd64-1.13.15-c5ba367e.tar.gz
+sudo cp geth-linux-amd64-1.13.15-c5ba367e/geth /usr/local/bin/
+geth version
+# should show: Version: 1.13.15-stable   (ARM machine: use arm64 instead of amd64)
+
+# ---------- 2. FOLDERS AND PASSWORD ----------
+mkdir -p ~/ethlab && cd ~/ethlab
+mkdir -p node1 node2 node3 logs
+echo "lab123" > password.txt
+
+# ---------- 3. CREATE ONE ACCOUNT PER NODE ----------
+geth --datadir node1 account new --password password.txt
+geth --datadir node2 account new --password password.txt
+geth --datadir node3 account new --password password.txt
+
+# save the addresses into files (so later commands can reuse them)
+ls node1/keystore | sed 's/.*--//' | sed 's/^/0x/' > addr1.txt
+ls node2/keystore | sed 's/.*--//' | sed 's/^/0x/' > addr2.txt
+ls node3/keystore | sed 's/.*--//' | sed 's/^/0x/' > addr3.txt
+A1=$(cat addr1.txt); A2=$(cat addr2.txt); A3=$(cat addr3.txt)
+echo "A1=$A1"; echo "A2=$A2"; echo "A3=$A3"
+
+# ---------- 4. CREATE genesis.json (Clique PoA, node1 is the signer) ----------
+Z64=$(printf '0%.0s' $(seq 1 64)); Z130=$(printf '0%.0s' $(seq 1 130))
+EXTRA="0x${Z64}${A1#0x}${Z130}"
+cat > genesis.json << EOF
+{
+  "config": {
+    "chainId": 1337,
+    "homesteadBlock": 0, "eip150Block": 0, "eip155Block": 0, "eip158Block": 0,
+    "byzantiumBlock": 0, "constantinopleBlock": 0, "petersburgBlock": 0,
+    "istanbulBlock": 0, "berlinBlock": 0, "londonBlock": 0,
+    "clique": { "period": 5, "epoch": 30000 }
+  },
+  "difficulty": "1",
+  "gasLimit": "8000000",
+  "extradata": "$EXTRA",
+  "alloc": {
+    "$A1": { "balance": "1000000000000000000000" },
+    "$A2": { "balance": "1000000000000000000000" },
+    "$A3": { "balance": "1000000000000000000000" }
+  }
+}
+EOF
+cat genesis.json
+# check: extradata must be 0x + 234 hex chars
+grep extradata genesis.json | tr -d '"extradata:, ' | wc -c    # should print 237 (236 + newline)
+
+# ---------- 5. INITIALISE ALL NODES WITH THE SAME GENESIS ----------
+geth --datadir node1 init genesis.json
+geth --datadir node2 init genesis.json
+geth --datadir node3 init genesis.json
+# each must end with "Successfully wrote genesis state"
+
+# ---------- DONE. Now go to task1.txt ----------

@@ -1,0 +1,91 @@
+Blockchain created with genesis block.
+Add at least 3 blocks, validate, then tamper and check again.
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 1
+Enter data for new block: Alice pays Bob 50
+Block 1 added.
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 1
+Enter data for new block: Bob pays Charlie 20
+Block 2 added.
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 1
+Enter data for new block: Charlie pays Dave 5
+Block 3 added.
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 2
+0 | Genesis | prev: 0 | hash: 5fbcb8f236
+1 | Alice pays Bob 50 | prev: 5fbcb8f236 | hash: 14fd89688b
+2 | Bob pays Charlie 20 | prev: 14fd89688b | hash: 490738efc9
+3 | Charlie pays Dave 5 | prev: 490738efc9 | hash: daa2be3db7
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 3
+Valid: True
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 4
+Enter block number (0 to 3): 1
+Old data: Alice pays Bob 50
+Enter new data: Alice pays Bob 5000
+Block 1 data changed.
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 3
+Block 1 hash is wrong (data changed)
+Valid: False
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 5
+  Block 0 OK
+  Block 1 BROKEN
+  Block 2 OK
+  Block 3 OK
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 6
+Enter block number (0 to 3): 1
+Block 1 hash recalculated.
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 5
+  Block 0 OK
+  Block 1 OK
+  Block 2 BROKEN
+  Block 3 OK
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 6
+Enter block number (0 to 3): 2
+Block 2 hash recalculated.
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 5
+  Block 0 OK
+  Block 1 OK
+  Block 2 OK
+  Block 3 BROKEN
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 6
+Enter block number (0 to 3): 3
+Block 3 hash recalculated.
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 5
+  Block 0 OK
+  Block 1 OK
+  Block 2 OK
+  Block 3 OK
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 3
+Valid: True
+
+1.Add block  2.Show chain  3.Validate  4.Tamper  5.Status of blocks  6.Recalculate hash  7.Exit
+Your choice: 7
+Bye
